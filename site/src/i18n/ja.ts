@@ -155,4 +155,5 @@ export const ja: Dict = {
   footerOpenSource: 'AGPL-3.0 のオープンソース',
   footerGithub: 'GitHub でソースコードを見る',
   footerCopyright: '© 2026 Tolkmeet',
+  biz: { name: '運営', rep: '代表', regNo: '事業者登録番号', address: '所在地', email: 'お問い合わせ', country: '(大韓民国)' },
 }

@@ -44,6 +44,8 @@ const HEALTHY_MS = 30_000
 const BACKOFF_MS = [1_000, 3_000, 10_000, 30_000]
 /** 세션이 없을 때 쌓아 두는 메시지(약 10초 분량) */
 const MAX_BACKLOG = 110
+/** 쉬지 않고 오래 말해 중간 결과가 이보다 길어지면 그 자리에서 구간을 끊는다(서버는 메시지 하나에 1000자까지 받는다). */
+const MAX_INTERIM_CHARS = 800
 const KEEPALIVE_SILENCE = new Int16Array(1600)
 
 type Slot = {
@@ -78,6 +80,8 @@ export class SttController {
   private lastActivityAt = 0
   /** 이번 구간에 마지막으로 보낸 텍스트(바뀐 경우에만 보낸다) */
   private sent = ''
+  /** 이번 발화에서 길어서 먼저 확정해 보낸 앞부분. Gemini 결과는 발화 처음부터 누적이라 이만큼 떼고 보낸다. */
+  private cut = ''
   private chunk: Int16Array[] = []
   private backlog: Msg[] = []
   private status: SttStatus | null = null
@@ -290,22 +294,45 @@ export class SttController {
     // 기다리는 결과가 없으면 버린다: 로컬 확정 뒤에 늦게 온 확정, 확정 뒤 덧붙은 중간 결과.
     // 받으면 같은 말이 새 구간으로 한 번 더 확정된다.
     if (!this.speaking && this.pendingFinals === 0) return
+    const rest = this.afterCut(text)
     if (final) {
       this.pendingFinals = Math.max(0, this.pendingFinals - 1)
-      if (text !== '' || this.sent !== '') {
-        this.deps.sendStt(this.seg.next++, text, true)
+      this.cut = ''
+      if (rest !== '' || this.sent !== '') {
+        this.deps.sendStt(this.seg.next++, rest, true)
         this.sent = ''
       }
-    } else if (text !== this.sent) {
-      this.deps.sendStt(this.seg.next, text, false)
-      this.sent = text
+    } else if (rest.length > MAX_INTERIM_CHARS) {
+      // 받은 데까지 이 구간으로 확정하고, 이어지는 말은 새 구간으로 보낸다(서버 한도에 걸려 글자를 잃지 않게).
+      this.deps.sendStt(this.seg.next++, rest, true)
+      this.sent = ''
+      this.cut = text
+    } else if (rest !== this.sent) {
+      this.deps.sendStt(this.seg.next, rest, false)
+      this.sent = rest
     }
     this.lastActivityAt = this.deps.now()
+  }
+
+  /** 먼저 확정해 보낸 앞부분을 뗀다. 그사이 Gemini가 앞쪽 글자를 고쳤으면 같은 길이만큼 뗀다. */
+  private afterCut(text: string): string {
+    if (this.cut === '') return text
+    // 앞머리가 다르거나 더 짧으면 잘린 말의 확정이 사라지고 새 말이 시작된 것이다: 자르지 않는다.
+    if (text.length < this.cut.length || !text.startsWith(this.cut.slice(0, 16))) {
+      this.cut = ''
+      return text
+    }
+    let at = this.cut.length
+    // 서로게이트 쌍(이모지 등) 가운데서 자르지 않는다.
+    const c = text.charCodeAt(at)
+    if (c >= 0xdc00 && c <= 0xdfff) at++
+    return text.slice(at).trimStart()
   }
 
   /** 확정 결과가 오지 않았다: 마지막 중간 결과를 이 구간의 확정으로 보낸다. */
   private finalizeLocally() {
     this.pendingFinals = 0
+    this.cut = ''
     if (this.sent === '') return
     this.deps.sendStt(this.seg.next++, this.sent, true)
     this.sent = ''

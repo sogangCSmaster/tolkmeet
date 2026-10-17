@@ -156,4 +156,5 @@ export const ko: Dict = {
   footerOpenSource: 'AGPL-3.0 오픈 소스',
   footerGithub: 'GitHub에서 소스 코드 보기',
   footerCopyright: '© 2026 Tolkmeet',
+  biz: { name: '상호', rep: '대표', regNo: '사업자등록번호', address: '주소', email: '이메일', country: '' },
 }

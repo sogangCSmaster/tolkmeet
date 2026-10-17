@@ -58,12 +58,20 @@ pub struct Accounts {
     /// 한 곳에서 대기 상태를 잔뜩 만들어 다른 사람의 진행 중인 로그인을 밀어내지 못하게.
     sign_in_starts: KeyedLimiter,
     sign_in_starts_by_net: KeyedLimiter,
-    /// Google 로그인 진행 중: state → (nonce, 연결할 사용자, 화면 언어, 시작 시각)
+    /// 이메일 인증 코드 확인: 클라이언트(/64)마다 15분 30번, 망(/48)마다 120번을 먼저 보고,
+    /// 그다음 (주소, 클라이언트)마다 5번, 주소마다 30번. 주소는 요청한 쪽 한도를 통과한 뒤에만 키로 쌓인다.
+    /// 틀린 시도가 코드를 없애지는 않는다. 주소 단위 한도는 여러 곳에서 나눠 맞히기를 막는 대신,
+    /// 여러 곳에서 일부러 틀리면 그 주소의 확인을 15분 동안 잠시 막을 수는 있다.
+    verify_by_ip: KeyedLimiter,
+    verify_by_net: KeyedLimiter,
+    verify_by_client: KeyedLimiter,
+    verify_by_email: KeyedLimiter,
+    /// Google 로그인 진행 중: state → (nonce, 연결할 사용자, 화면 언어, 돌아갈 경로, 시작 시각)
     oauth: Mutex<HashMap<String, OAuthPending>>,
 }
 
-/// (nonce, 연결할 사용자, 화면 언어, 시작 시각)
-type OAuthPending = (String, Option<i64>, String, Instant);
+/// (nonce, 연결할 사용자, 화면 언어, 로그인 뒤 돌아갈 경로, 시작 시각)
+type OAuthPending = (String, Option<i64>, String, String, Instant);
 
 pub struct Google {
     pub client_id: String,
@@ -103,6 +111,10 @@ impl Accounts {
             by_ip: KeyedLimiter::new(20, Duration::from_secs(3600)),
             sign_in_starts: KeyedLimiter::new(30, Duration::from_secs(60)),
             sign_in_starts_by_net: KeyedLimiter::new(120, Duration::from_secs(60)),
+            verify_by_ip: KeyedLimiter::new(30, Duration::from_secs(15 * 60)),
+            verify_by_net: KeyedLimiter::new(120, Duration::from_secs(15 * 60)),
+            verify_by_client: KeyedLimiter::new(5, Duration::from_secs(15 * 60)),
+            verify_by_email: KeyedLimiter::new(30, Duration::from_secs(15 * 60)),
             by_email: KeyedLimiter::new(5, Duration::from_secs(3600)),
             invites_by_user: KeyedLimiter::new(100, Duration::from_secs(86_400)),
             invites_by_rcpt: KeyedLimiter::new(5, Duration::from_secs(86_400)),
@@ -172,10 +184,7 @@ impl Accounts {
 
 /// 빈도 제한의 넓은 단위: IPv6는 /48(보통 한 사이트·터널에 주는 크기), IPv4는 그대로.
 fn net48(ip: IpAddr) -> String {
-    match auth::client_key(ip) {
-        IpAddr::V6(v6) => std::net::Ipv6Addr::from_bits(v6.to_bits() & (u128::MAX << 80)).to_string(),
-        v4 => v4.to_string(),
-    }
+    auth::net_key(ip).to_string()
 }
 
 // ── 공통 ──────────────────────────────────────────────
@@ -223,7 +232,8 @@ fn valid_email(email: &str) -> bool {
 }
 
 fn valid_password(p: &str) -> bool {
-    (MIN_PASSWORD..=MAX_PASSWORD).contains(&p.chars().count())
+    // 길이 하한은 글자 수, 상한은 로그인과 같은 바이트 수로 본다(설정은 되는데 로그인은 안 되는 비밀번호가 없게).
+    p.chars().count() >= MIN_PASSWORD && p.len() <= MAX_PASSWORD
 }
 
 fn clean_locale(l: &str) -> &'static str {
@@ -235,11 +245,18 @@ fn clean_locale(l: &str) -> &'static str {
 }
 
 fn clean_name(n: &str) -> String {
-    n.trim()
-        .chars()
-        .filter(|c| !c.is_control())
-        .take(60)
-        .collect()
+    let visible: String = n.chars().filter(|&c| !c.is_control() && !invisible(c)).collect();
+    visible.trim().chars().take(60).collect()
+}
+
+/// 보이지 않는데 화면·메일에서 글의 방향이나 줄을 바꾸거나 빈 글자로 보이는 문자
+/// (양방향 제어, 줄·문단 구분, 폭 없는 공백, 한글 채움 문자, 소프트 하이픈, 태그 문자).
+/// 이름·제목에 섞이면 다른 사람에게 보이는 글을 속일 수 있다. 이모지·문자 결합에 쓰는 ZWJ·ZWNJ는 둔다.
+pub fn invisible(c: char) -> bool {
+    matches!(c,
+        '\u{00AD}' | '\u{034F}' | '\u{061C}' | '\u{115F}' | '\u{1160}' | '\u{200B}' | '\u{200E}' | '\u{200F}'
+        | '\u{2028}' | '\u{2029}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{206F}'
+        | '\u{3164}' | '\u{FEFF}' | '\u{FFA0}' | '\u{FFF9}'..='\u{FFFB}' | '\u{E0000}'..='\u{E007F}')
 }
 
 /// argon2 해싱은 블로킹 스레드에서.
@@ -392,15 +409,17 @@ pub async fn signup(
     if !valid_password(&req.password) {
         return error(StatusCode::BAD_REQUEST, "password");
     }
-    if breached(&req.password).await {
-        return error(StatusCode::BAD_REQUEST, "breached");
-    }
+    // 빈도 제한을 먼저 본다(막힌 요청이 유출 확인 요청을 밖으로 보내지 않게).
     let ip = client(&state, peer, &headers);
     if !state.accounts.may_mail(ip, &email) {
         return error(StatusCode::TOO_MANY_REQUESTS, "rate_limited");
     }
+    if breached(&req.password).await {
+        return error(StatusCode::BAD_REQUEST, "breached");
+    }
     let locale = clean_locale(&req.locale).to_owned();
     let name = clean_name(&req.name);
+    let name_for_payload = name.clone();
     let Some(hash) = hash_async(&req.password).await else {
         return error(StatusCode::INTERNAL_SERVER_ERROR, "failed");
     };
@@ -436,7 +455,11 @@ pub async fn signup(
                 .reset_link(&email, &url),
             );
         }
-    } else if let Ok(code) = new_email_code(&db, user_id, "verify", Some(hash)).await {
+    } else if let Ok(code) = {
+        // 이름·언어도 코드와 함께 두었다가, 이 가입이 인증될 때 계정에 넣는다(먼저 가입해 둔 남의 이름이 남지 않게).
+        let payload = auth::SignupPayload { hash, name: name_for_payload, locale: locale.clone(), legacy: false }.encode();
+        new_email_code(&db, user_id, "verify", Some(payload)).await
+    } {
         send_verify_code(&state, email, &locale, &code);
     }
     StatusCode::ACCEPTED.into_response()
@@ -454,16 +477,39 @@ pub struct VerifyReq {
 /// 그 비밀번호로 계정을 열고 바로 로그인시킨다. 틀린 시도는 코드마다 5번까지.
 pub async fn verify(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(req): Json<VerifyReq>,
 ) -> Response {
     let email = normalize_username(&req.email);
+    // 주소 형식이 아니면 어떤 계정과도 맞지 않는다. 틀린 코드와 같게 답하고 아무 키도 쌓지 않는다.
+    if !email.contains('@') || !auth::is_valid_username(&email) {
+        return error(StatusCode::BAD_REQUEST, "code");
+    }
+    let addr = client(&state, peer, &headers);
+    let (ip, net) = (auth::client_key(addr).to_string(), net48(addr));
+    let by_client = format!("{email}|{ip}");
+    let limits = &state.accounts;
+    // 요청한 쪽(/64·/48) 한도를 먼저 본다: 아무 주소나 넣어 맵을 채우거나 다른 사람의 몫을 쓰지 못하게.
+    // 모두 남아 있을 때만 센다(한쪽이 막혔는데 다른 쪽만 깎이지 않게).
+    let allowed = limits.verify_by_ip.allows(&ip)
+        && limits.verify_by_net.allows(&net)
+        && limits.verify_by_client.allows(&by_client)
+        && limits.verify_by_email.allows(&email)
+        && limits.verify_by_ip.check(&ip)
+        && limits.verify_by_net.check(&net)
+        && limits.verify_by_client.check(&by_client)
+        && limits.verify_by_email.check(&email);
+    if !allowed {
+        return error(StatusCode::TOO_MANY_REQUESTS, "rate_limited");
+    }
     let code = req.code.trim().to_owned();
     let db = state.auth.db().clone();
     let now = now_secs();
     let found = db
         .call(move |c| {
             let Some(u) = user_by_email(c, &email)? else { return Ok(None) };
+            // 이미 연 계정도 틀린 코드와 같게 답한다(주소만으로 가입 여부를 알 수 없게).
             if u.verified {
                 return Ok(None);
             }
@@ -476,25 +522,22 @@ pub async fn verify(
                     |r| Ok((r.get(0)?, r.get(1)?)),
                 )
                 .optional()?;
-            if row.is_none() {
-                // 틀린 코드: 이 계정의 살아 있는 코드 모두에 시도를 센다(코드 맞히기 제한).
-                c.execute(
-                    "UPDATE email_codes SET attempts = attempts + 1 WHERE user_id = ?1 AND kind = 'verify'",
-                    params![u.id],
-                )?;
-            }
             Ok(row.map(|(id, payload)| (u.id, id, payload)))
         })
         .await;
-    let Ok(Some((user_id, code_id, Some(hash)))) = found else {
+    let Ok(Some((user_id, code_id, Some(raw)))) = found else {
+        return error(StatusCode::BAD_REQUEST, "code");
+    };
+    let Some(payload) = auth::SignupPayload::decode(&raw) else {
         return error(StatusCode::BAD_REQUEST, "code");
     };
     let password = req.password.clone();
-    let h = hash.clone();
+    let h = payload.hash.clone();
     let matches = tokio::task::spawn_blocking(move || auth::verify_password(&password, &h))
         .await
         .unwrap_or(false);
     if !matches {
+        // 코드는 맞고 비밀번호가 다르면(그 코드를 만든 가입자가 아님) 그 코드에만 시도를 센다.
         let _ = db
             .call(move |c| {
                 c.execute(
@@ -505,12 +548,22 @@ pub async fn verify(
             .await;
         return error(StatusCode::BAD_REQUEST, "password");
     }
+    let hash = payload.hash;
+    // 이 가입에서 넣은 이름·언어로 계정을 연다. 이름을 비워 두었으면 비운다(먼저 남이 넣은 이름이 남지 않게).
+    // 예전 판 코드면 이름·언어를 몰라 그대로 둔다.
+    let keep_name = payload.legacy;
+    let name = clean_name(&payload.name);
+    let locale = if payload.locale.is_empty() { String::new() } else { clean_locale(&payload.locale).to_owned() };
     let opened = db
         .call(move |c| {
             let tx = c.transaction()?;
             tx.execute(
-                "UPDATE users SET email_verified = 1, password_hash = ?2, password_changed_at = ?3 WHERE id = ?1 AND email_verified = 0",
-                params![user_id, hash, now],
+                "UPDATE users SET email_verified = 1, password_hash = ?2, password_changed_at = ?3,
+                   name = CASE WHEN ?6 THEN name ELSE ?4 END,
+                   display_name = CASE WHEN ?6 THEN display_name ELSE ?4 END,
+                   locale = CASE WHEN ?5 != '' THEN ?5 ELSE locale END
+                 WHERE id = ?1 AND email_verified = 0",
+                params![user_id, hash, now, name, locale, keep_name],
             )?;
             tx.execute("DELETE FROM email_codes WHERE user_id = ?1 AND kind = 'verify'", params![user_id])?;
             tx.commit()
@@ -519,10 +572,9 @@ pub async fn verify(
     if opened.is_err() {
         return error(StatusCode::INTERNAL_SERVER_ERROR, "failed");
     }
-    let token = state
-        .auth
-        .create_session(user_id, &user_agent(&headers))
-        .await;
+    let Some(token) = state.auth.create_session(user_id, &user_agent(&headers)).await else {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, "failed");
+    };
     with_session(&state, &token, StatusCode::NO_CONTENT, None)
 }
 
@@ -539,6 +591,10 @@ pub async fn resend(
     Json(req): Json<EmailReq>,
 ) -> Response {
     let email = normalize_username(&req.email);
+    // 주소 형식이 아니면 보낼 곳이 없다. 보낸 것과 같게 답하고 한도 키를 쌓지 않는다.
+    if !email.contains('@') || !auth::is_valid_username(&email) {
+        return StatusCode::NO_CONTENT.into_response();
+    }
     let ip = client(&state, peer, &headers);
     if !state.accounts.may_mail(ip, &email) {
         return error(StatusCode::TOO_MANY_REQUESTS, "rate_limited");
@@ -622,10 +678,11 @@ pub async fn login(
     Json(req): Json<LoginReq>,
 ) -> Response {
     let ip = client(&state, peer, &headers);
-    match state.auth.login(ip, &req.email, &req.password).await {
+    match state.auth.login_with_agent(ip, &req.email, &req.password, &user_agent(&headers)).await {
         Ok(token) => with_session(&state, &token, StatusCode::NO_CONTENT, None),
         Err(LoginError::Invalid) => error(StatusCode::UNAUTHORIZED, "invalid"),
         Err(LoginError::Locked) => error(StatusCode::TOO_MANY_REQUESTS, "locked"),
+        Err(LoginError::Busy) => error(StatusCode::SERVICE_UNAVAILABLE, "busy"),
         Err(LoginError::Unverified) => error(StatusCode::FORBIDDEN, "unverified"),
         Err(LoginError::MfaRequired(ticket)) => {
             // 전에 "이 기기는 묻지 않기"를 고른 브라우저면 2차 인증을 건너뛴다.
@@ -633,7 +690,9 @@ pub async fn login(
                 && trusted_device(state.auth.db(), &headers, uid).await
             {
                 state.auth.take_mfa_ticket(&ticket);
-                let token = state.auth.create_session(uid, &user_agent(&headers)).await;
+                let Some(token) = state.auth.create_session(uid, &user_agent(&headers)).await else {
+                    return error(StatusCode::INTERNAL_SERVER_ERROR, "failed");
+                };
                 return with_session(&state, &token, StatusCode::NO_CONTENT, None);
             }
             Json(json!({ "mfa": ticket })).into_response()
@@ -681,10 +740,9 @@ pub async fn login_mfa(
         return error(StatusCode::UNAUTHORIZED, "code");
     }
     state.auth.take_mfa_ticket(&req.ticket);
-    let token = state
-        .auth
-        .create_session(user_id, &user_agent(&headers))
-        .await;
+    let Some(token) = state.auth.create_session(user_id, &user_agent(&headers)).await else {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, "failed");
+    };
     let mut cookies = vec![(
         header::SET_COOKIE,
         auth::session_cookie(&token, state.cookie_secure),
@@ -885,14 +943,18 @@ pub async fn reset(
             if found.is_none() {
                 return Ok(None);
             }
-            c.execute("DELETE FROM email_codes WHERE user_id = ?1 AND kind = 'reset'", params![uid])?;
-            c.execute(
+            // 링크를 쓰는 것과 비밀번호를 바꾸는 것은 함께 되거나 함께 안 되게 한다.
+            let tx = c.transaction()?;
+            tx.execute("DELETE FROM email_codes WHERE user_id = ?1 AND kind = 'reset'", params![uid])?;
+            tx.execute(
                 "UPDATE users SET password_hash = ?2, email_verified = 1, password_changed_at = ?3 WHERE id = ?1",
                 params![uid, hash, now],
             )?;
             // 비밀번호를 바꿨으니 믿는 기기 기록도 지운다.
-            c.execute("DELETE FROM trusted_devices WHERE user_id = ?1", params![uid])?;
-            c.query_row("SELECT totp_enabled FROM users WHERE id = ?1", params![uid], |r| r.get::<_, bool>(0)).map(Some)
+            tx.execute("DELETE FROM trusted_devices WHERE user_id = ?1", params![uid])?;
+            let totp = tx.query_row("SELECT totp_enabled FROM users WHERE id = ?1", params![uid], |r| r.get::<_, bool>(0))?;
+            tx.commit()?;
+            Ok(Some(totp))
         })
         .await;
     let totp = match result {
@@ -904,7 +966,9 @@ pub async fn reset(
     if totp {
         return Json(json!({ "mfa": state.auth.new_mfa_ticket(uid) })).into_response();
     }
-    let token = state.auth.create_session(uid, &user_agent(&headers)).await;
+    let Some(token) = state.auth.create_session(uid, &user_agent(&headers)).await else {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, "failed");
+    };
     with_session(&state, &token, StatusCode::NO_CONTENT, None)
 }
 
@@ -1040,6 +1104,7 @@ async fn reauth(
         return match state.auth.check_password(ip, uid, password).await {
             Ok(()) => Ok(()),
             Err(LoginError::Locked) => Err(error(StatusCode::TOO_MANY_REQUESTS, "locked")),
+            Err(LoginError::Busy) => Err(error(StatusCode::SERVICE_UNAVAILABLE, "busy")),
             Err(_) => Err(error(StatusCode::UNAUTHORIZED, "current")),
         };
     }
@@ -1197,7 +1262,8 @@ pub async fn email_change(
     let info = db
         .call(move |c| {
             let taken: bool = c.query_row(
-                "SELECT EXISTS(SELECT 1 FROM users WHERE email = ?1)",
+                // 가입만 해 두고 인증하지 않은 주소는 쓰는 것으로 보지 않는다(인증할 때 그 행을 지운다).
+                "SELECT EXISTS(SELECT 1 FROM users WHERE email = ?1 AND (email_verified = 1 OR password_hash IS NOT NULL OR google_sub IS NOT NULL))",
                 params![e],
                 |r| r.get(0),
             )?;
@@ -1264,16 +1330,31 @@ pub async fn email_change_verify(
                 c.execute("UPDATE email_codes SET attempts = attempts + 1 WHERE user_id = ?1 AND kind = 'email'", params![uid])?;
                 return Ok(Err("code"));
             };
-            c.execute("DELETE FROM email_codes WHERE user_id = ?1 AND kind = 'email'", params![uid])?;
-            // 그사이 다른 계정이 그 주소를 가져갔으면 실패.
+            let tx = c.transaction()?;
+            // 예전 주소로 보낸 재설정·인증 링크도 함께 무효로 한다(잃어버린 예전 메일함으로 계정을 되찾지 못하게).
+            tx.execute(
+                "DELETE FROM email_codes WHERE user_id = ?1 AND kind IN ('email', 'reset', 'verify')",
+                params![uid],
+            )?;
+            // 그 주소로 가입만 해 두고 인증하지 않은 계정은 지운다(메일함을 가진 사람이 지금 확인했다).
+            tx.execute(
+                "DELETE FROM users WHERE email = ?1 AND email_verified = 0 AND password_hash IS NULL AND google_sub IS NULL AND id != ?2",
+                params![email, uid],
+            )?;
             let (old, locale): (String, String) =
-                c.query_row("SELECT email, locale FROM users WHERE id = ?1", params![uid], |r| Ok((r.get(0)?, r.get(1)?)))?;
-            match c.execute("UPDATE users SET email = ?2, email_verified = 1 WHERE id = ?1", params![uid, email]) {
+                tx.query_row("SELECT email, locale FROM users WHERE id = ?1", params![uid], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            match tx.execute("UPDATE users SET email = ?2, email_verified = 1 WHERE id = ?1", params![uid, email]) {
                 Ok(_) => {
-                    c.execute("DELETE FROM trusted_devices WHERE user_id = ?1", params![uid])?;
+                    tx.execute("DELETE FROM trusted_devices WHERE user_id = ?1", params![uid])?;
+                    tx.commit()?;
                     Ok(Ok((old, email, locale)))
                 }
-                Err(_) => Ok(Err("taken")),
+                // 그사이 다른 계정이 그 주소를 가져갔으면(유일 제약 위반) 실패. 다른 오류는 그대로 올린다.
+                Err(rusqlite::Error::SqliteFailure(e, _)) if e.code == rusqlite::ErrorCode::ConstraintViolation => {
+                    tx.commit()?;
+                    Ok(Err("taken"))
+                }
+                Err(e) => Err(e),
             }
         })
         .await;
@@ -1358,14 +1439,14 @@ pub async fn change_password(
     let now = now_secs();
     if db
         .call(move |c| {
-            c.execute(
+            // 비밀번호와 믿는 기기 정리는 함께 되거나 함께 안 되게 한다.
+            let tx = c.transaction()?;
+            tx.execute(
                 "UPDATE users SET password_hash = ?2, password_changed_at = ?3 WHERE id = ?1",
                 params![uid, hash, now],
             )?;
-            c.execute(
-                "DELETE FROM trusted_devices WHERE user_id = ?1",
-                params![uid],
-            )
+            tx.execute("DELETE FROM trusted_devices WHERE user_id = ?1", params![uid])?;
+            tx.commit()
         })
         .await
         .is_err()
@@ -1422,12 +1503,19 @@ pub async fn delete_account(
         Err(r) => return r,
     };
     let db = state.auth.db().clone();
-    let Ok(Some((email, has_password, subscription))) = db
+    let Ok(Some((email, has_password, subscription, pending_checkout))) = db
         .call(move |c| {
             c.query_row(
-                "SELECT email, password_hash IS NOT NULL, paddle_subscription_id FROM users WHERE id = ?1",
+                "SELECT email, password_hash IS NOT NULL, paddle_subscription_id, NULLIF(paddle_pending_txn, '') FROM users WHERE id = ?1",
                 params![uid],
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?, r.get::<_, Option<String>>(2)?)),
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, bool>(1)?,
+                        r.get::<_, Option<String>>(2)?,
+                        r.get::<_, Option<String>>(3)?,
+                    ))
+                },
             )
             .optional()
         })
@@ -1450,20 +1538,53 @@ pub async fn delete_account(
     if !has_password && normalize_username(&req.confirm) != email {
         return error(StatusCode::BAD_REQUEST, "confirm");
     }
-    // 결제 중인 구독은 먼저 해지한다(실패하면 지우지 않는다: 지운 뒤에도 결제가 계속되면 안 된다).
-    if let (Some(billing), Some(sub)) = (&state.billing, subscription)
-        && billing.cancel_now(&sub).await.is_err()
-    {
-        return error(StatusCode::BAD_GATEWAY, "billing");
-    }
-    state.auth.revoke_user_sessions(uid, None).await;
+    // 계정을 먼저 지우고(세션 행은 함께 지워진다) 메모리의 세션·진행 중인 로그인을 버린다.
+    // 순서를 반대로 하면 그사이 끝난 로그인이 지운 계정의 세션을 새로 만들 수 있다.
+    // 남은 구독(요금제와 상관없이: 멈춘 구독도 다시 결제될 수 있다)은 같은 트랜잭션에서 해지 대기열에 넣는다.
+    // 대기열은 사용자 행과 따로 남아, Paddle이 해지를 확인할 때까지 다시 시도한다(지운 뒤에도 결제가 이어지지 않게).
+    let queued = subscription.is_some();
     if db
-        .call(move |c| c.execute("DELETE FROM users WHERE id = ?1", params![uid]))
+        .call(move |c| {
+            let tx = c.transaction()?;
+            let now = crate::db::now_secs();
+            if let Some(sub) = &subscription {
+                crate::billing::queue_cancellation(&tx, sub, false, now)?;
+            }
+            // 결제 기록은 계정과 함께 지워진다. 나중에 온 그 결제의 환불을 Paddle이 며칠 다시 보내게 하지 않게 id만 남긴다.
+            crate::billing::skip_payments_of(&tx, uid, now)?;
+            tx.execute("DELETE FROM users WHERE id = ?1", params![uid])?;
+            tx.commit()
+        })
         .await
         .is_err()
     {
         return error(StatusCode::INTERNAL_SERVER_ERROR, "failed");
     }
+    if let Some(billing) = state.billing.clone() {
+        let db = db.clone();
+        tokio::spawn(async move {
+            // 다른 탭에 열어 둔 결제창으로 지운 계정의 구독이 생기지 않게 기다리던 결제 거래를 취소해 본다
+            // (이미 결제 중이면 실패하고, 그 구독은 웹훅이 오면 해지 대기열에 들어간다).
+            if let Some(txn) = pending_checkout
+                && let Err(e) = billing.cancel_transaction(&txn).await
+            {
+                tracing::warn!(error = %e, "could not cancel the pending checkout of a deleted account");
+            }
+            if queued {
+                billing.process_cancellations(&db).await;
+            }
+        });
+    }
+    state.auth.revoke_user_sessions(uid, None).await;
+    state.auth.drop_mfa_tickets(uid);
+    state
+        .accounts
+        .oauth
+        .lock()
+        .unwrap()
+        .retain(|_, (_, link, _, _, _)| *link != Some(uid));
+    // 지운 데이터가 WAL 파일에 남지 않게 체크포인트한다(백업 도구가 읽는 중이면 일부만 될 수 있다).
+    let _ = db.call(|c| c.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")).await;
     (
         StatusCode::NO_CONTENT,
         [(header::SET_COOKIE, auth::clear_cookie(state.cookie_secure))],
@@ -1511,7 +1632,26 @@ pub async fn export(State(state): State<AppState>, headers: HeaderMap) -> Respon
         })
         .await
         .unwrap_or_default();
-    let body = json!({ "exportedAt": now_secs(), "account": user, "meetings": meetings });
+    // 계정에 남긴 결제 기록(Paddle 거래). 금액은 Paddle처럼 통화의 가장 작은 단위(USD면 센트)다.
+    let payments = db
+        .call(move |c| {
+            let mut stmt = c.prepare(
+                "SELECT id, kind, subscription_id, seconds, total, currency, refunded, seconds_back, created_at
+                 FROM paddle_transactions WHERE user_id = ?1 ORDER BY created_at",
+            )?;
+            stmt.query_map(params![uid], |r| {
+                Ok(json!({
+                    "transactionId": r.get::<_, String>(0)?, "kind": r.get::<_, String>(1)?,
+                    "subscriptionId": r.get::<_, Option<String>>(2)?, "seconds": r.get::<_, i64>(3)?,
+                    "amount": r.get::<_, i64>(4)?, "currency": r.get::<_, String>(5)?, "refunded": r.get::<_, i64>(6)?,
+                    "secondsRemoved": r.get::<_, i64>(7)?, "createdAt": r.get::<_, i64>(8)?,
+                }))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()
+        })
+        .await
+        .unwrap_or_default();
+    let body = json!({ "exportedAt": now_secs(), "account": user, "meetings": meetings, "payments": payments });
     (
         [
             (header::CONTENT_TYPE, "application/json".to_owned()),
@@ -1666,7 +1806,8 @@ pub async fn totp_recovery(
         .auth
         .db()
         .call(move |c| {
-            if !check_totp(c, uid, &code)? {
+            // 인증 앱을 잃어버렸으면 남은 복구 코드로도 새 복구 코드를 받을 수 있다.
+            if !check_totp(c, uid, &code)? && !use_recovery_code(c, uid, &code)? {
                 return Ok(None);
             }
             new_recovery_codes(c, uid).map(Some)
@@ -1698,21 +1839,19 @@ pub async fn totp_disable(
         .auth
         .db()
         .call(move |c| {
-            if !check_totp(c, uid, &code)? {
+            let tx = c.transaction()?;
+            // 인증 앱을 잃어버렸으면 남은 복구 코드로도 끌 수 있다(그다음 새 기기로 다시 켠다).
+            if !check_totp(&tx, uid, &code)? && !use_recovery_code(&tx, uid, &code)? {
+                tx.commit()?;
                 return Ok(false);
             }
-            c.execute(
-                "DELETE FROM recovery_codes WHERE user_id = ?1",
-                params![uid],
-            )?;
-            c.execute(
-                "DELETE FROM trusted_devices WHERE user_id = ?1",
-                params![uid],
-            )?;
-            c.execute(
+            tx.execute("DELETE FROM recovery_codes WHERE user_id = ?1", params![uid])?;
+            tx.execute("DELETE FROM trusted_devices WHERE user_id = ?1", params![uid])?;
+            tx.execute(
                 "UPDATE users SET totp_enabled = 0, totp_secret = NULL WHERE id = ?1",
                 params![uid],
             )?;
+            tx.commit()?;
             Ok(true)
         })
         .await
@@ -1882,7 +2021,9 @@ pub async fn passkey_login(
             )
         })
         .await;
-    let token = state.auth.create_session(uid, &user_agent(&headers)).await;
+    let Some(token) = state.auth.create_session(uid, &user_agent(&headers)).await else {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, "failed");
+    };
     with_session(&state, &token, StatusCode::NO_CONTENT, None)
 }
 
@@ -1920,6 +2061,22 @@ pub async fn passkey_delete(
 pub struct GoogleStart {
     #[serde(default)]
     locale: String,
+    /// 로그인 뒤 돌아갈 이 사이트 안의 경로(예: 회의 로비). 검사해서 맞지 않으면 버린다.
+    #[serde(default)]
+    next: String,
+}
+
+/// 로그인 뒤 돌아갈 곳: 이 사이트 안의 경로만 받는다(다른 사이트로 보내는 데 쓰이지 않게).
+/// 웹의 `safeNext`와 같은 규칙.
+fn safe_next(next: &str) -> Option<&str> {
+    let ok = next.starts_with('/')
+        && !next.starts_with("//")
+        && next.len() <= 512
+        && !next.chars().any(|c| c.is_control() || c == '\\');
+    // 로그인·가입 화면으로 돌아가면 로그인한 뒤에도 빈 화면에 머문다.
+    let path = next.split(['?', '#']).next().unwrap_or("").trim_end_matches('/');
+    let auth_page = ["/login", "/signup", "/verify", "/forgot", "/reset"].contains(&path);
+    (ok && !auth_page).then_some(next)
 }
 
 pub async fn google_start(
@@ -1931,7 +2088,7 @@ pub async fn google_start(
     if !state.accounts.may_start_sign_in(client(&state, peer, &headers)) {
         return Redirect::to("/login?error=google").into_response();
     }
-    let Some((url, cookie)) = google_begin(&state, None, &q.locale) else {
+    let Some((url, cookie)) = google_begin(&state, None, &q.locale, &q.next) else {
         return Redirect::to("/login?error=google").into_response();
     };
     ([(header::SET_COOKIE, cookie)], Redirect::to(&url)).into_response()
@@ -1968,29 +2125,29 @@ pub async fn google_link(
         return error(StatusCode::CONFLICT, "linked");
     }
     let locale = req.locale.clone();
-    let Some((url, cookie)) = google_begin(&state, Some(uid), &locale) else {
+    let Some((url, cookie)) = google_begin(&state, Some(uid), &locale, "") else {
         return error(StatusCode::NOT_FOUND, "google");
     };
     ([(header::SET_COOKIE, cookie)], Json(json!({ "url": url }))).into_response()
 }
 
 /// Google 로그인을 시작한다: state·nonce를 기억하고 (이동할 주소, 이 브라우저에 묶을 쿠키)를 돌려준다.
-fn google_begin(state: &AppState, link: Option<i64>, locale: &str) -> Option<(String, String)> {
+fn google_begin(state: &AppState, link: Option<i64>, locale: &str, next: &str) -> Option<(String, String)> {
     let google = state.accounts.google.as_ref()?;
     let st = new_token();
     let nonce = new_token();
     {
         let mut map = state.accounts.oauth.lock().unwrap();
-        map.retain(|_, (_, _, _, at)| at.elapsed() < OAUTH_TTL);
+        map.retain(|_, (_, _, _, _, at)| at.elapsed() < OAUTH_TTL);
         // 로그인하지 않은 요청도 하나씩 쌓으므로 상한을 두고, 넘으면 가장 오래된 것을 버린다.
         if map.len() >= 10_000
-            && let Some(oldest) = map.iter().min_by_key(|(_, (_, _, _, at))| *at).map(|(k, _)| k.clone())
+            && let Some(oldest) = map.iter().min_by_key(|(_, (_, _, _, _, at))| *at).map(|(k, _)| k.clone())
         {
             map.remove(&oldest);
         }
         map.insert(
             st.clone(),
-            (nonce.clone(), link, clean_locale(locale).to_owned(), Instant::now()),
+            (nonce.clone(), link, clean_locale(locale).to_owned(), safe_next(next).unwrap_or("").to_owned(), Instant::now()),
         );
     }
     let redirect = format!("{}/api/auth/google/callback", state.accounts.origin);
@@ -2043,12 +2200,27 @@ pub async fn google_callback(
 ) -> Response {
     // 실패 이유는 남긴다(코드·토큰·비밀은 남기지 않는다). 키나 리디렉션 주소 설정이 틀렸을 때 알아보려고.
     // 연결(로그인한 계정에 잇기) 중이었으면 보안 화면으로, 아니면 로그인 화면으로 돌려보낸다.
+    // 실패하거나 취소해도 돌아갈 곳은 지킨다(이어서 비밀번호로 로그인해도 회의 로비 등으로 돌아가게).
+    // 저장할 때 이미 safe_next로 검사한 값이다.
+    let (pending_next, pending_link) = q
+        .state
+        .as_deref()
+        .and_then(|st| state.accounts.oauth.lock().unwrap().get(st).map(|p| (p.3.clone(), p.1.is_some())))
+        .unwrap_or_default();
     let fail = |why: &str, link: bool| {
         tracing::warn!(reason = why, "google sign-in failed");
-        Redirect::to(if link { "/account/security?error=google" } else { "/login?error=google" }).into_response()
+        let to = if link {
+            "/account/security?error=google".to_owned()
+        } else if pending_next.is_empty() {
+            "/login?error=google".to_owned()
+        } else {
+            format!("/login?error=google&next={}", urlencode(&pending_next))
+        };
+        Redirect::to(&to).into_response()
     };
     let (Some(google), Some(code), Some(st)) = (&state.accounts.google, q.code, q.state) else {
-        return fail("missing code or state (sign-in canceled?)", false);
+        // 연결 중에 취소했으면 보안 화면으로 돌아간다.
+        return fail("missing code or state (sign-in canceled?)", pending_link);
     };
     let cookie_state = headers
         .get_all(header::COOKIE)
@@ -2064,16 +2236,22 @@ pub async fn google_callback(
     if cookie_state.as_deref() != Some(st.as_str()) {
         return fail("state cookie does not match", false);
     }
-    let Some((nonce, link, locale, _)) = state
+    let Some((nonce, link, locale, next, _)) = state
         .accounts
         .oauth
         .lock()
         .unwrap()
         .remove(&st)
-        .filter(|(_, _, _, at)| at.elapsed() < OAUTH_TTL)
+        .filter(|(_, _, _, _, at)| at.elapsed() < OAUTH_TTL)
     else {
         return fail("unknown or expired state", false);
     };
+    // 연결은 시작한 사용자가 지금도 로그인해 있을 때만(그사이 로그아웃·계정 삭제·다른 계정 로그인이면 실패).
+    if let Some(uid) = link
+        && state.auth.user_id_from_headers(&headers) != Some(uid)
+    {
+        return fail("link session changed", true);
+    }
     let redirect = format!("{}/api/auth/google/callback", state.accounts.origin);
     let res = google
         .http
@@ -2158,20 +2336,23 @@ pub async fn google_callback(
         .unwrap_or(true);
     if totp && !trusted_device(state.auth.db(), &headers, uid).await {
         let ticket = state.auth.new_mfa_ticket(uid);
+        let then = if next.is_empty() { String::new() } else { format!("&next={}", urlencode(&next)) };
         return (
             [(header::SET_COOKIE, clear)],
-            Redirect::to(&format!("/login?mfa={ticket}")),
+            Redirect::to(&format!("/login?mfa={ticket}{then}")),
         )
             .into_response();
     }
-    let token = state.auth.create_session(uid, &user_agent(&headers)).await;
+    let Some(token) = state.auth.create_session(uid, &user_agent(&headers)).await else {
+        return fail("could not save the session", false);
+    };
     // 같은 이름의 헤더를 두 개 보내므로 AppendHeaders로(배열은 앞의 값을 덮어써 세션 쿠키가 사라진다).
     (
         axum::response::AppendHeaders([
             (header::SET_COOKIE, auth::session_cookie(&token, state.cookie_secure)),
             (header::SET_COOKIE, clear),
         ]),
-        Redirect::to("/"),
+        Redirect::to(if next.is_empty() { "/" } else { &next }),
     )
         .into_response()
 }
@@ -2214,18 +2395,22 @@ fn google_account(
         return Ok(Some((uid, false)));
     }
     match user_by_email(c, email)? {
+        // 이미 다른 Google 계정이 연결돼 있으면 덮어쓰지 않는다(같은 이메일의 다른 Google 계정으로 바뀌지 않게).
         Some(u) if u.verified => {
-            c.execute(
-                "UPDATE users SET google_sub = ?2 WHERE id = ?1",
+            let changed = c.execute(
+                "UPDATE users SET google_sub = ?2 WHERE id = ?1 AND google_sub IS NULL",
                 params![u.id, sub],
             )?;
-            Ok(Some((u.id, false)))
+            Ok((changed == 1).then_some((u.id, false)))
         }
         Some(u) => {
-            c.execute(
-                "UPDATE users SET google_sub = ?2, email_verified = 1, password_hash = NULL WHERE id = ?1",
+            let changed = c.execute(
+                "UPDATE users SET google_sub = ?2, email_verified = 1, password_hash = NULL WHERE id = ?1 AND google_sub IS NULL",
                 params![u.id, sub],
             )?;
+            if changed == 0 {
+                return Ok(None);
+            }
             let _ = u.has_password;
             Ok(Some((u.id, true)))
         }
@@ -2343,11 +2528,15 @@ mod tests {
 
         /// 시작 요청을 보내 Google로 가는 주소에서 state·nonce를, 응답에서 브라우저 쿠키를 꺼낸다.
         async fn start(state: &AppState) -> (String, String, String) {
+            start_to(state, "").await
+        }
+
+        async fn start_to(state: &AppState, next: &str) -> (String, String, String) {
             let res = google_start(
                 State(state.clone()),
                 ConnectInfo("127.0.0.1:1".parse().unwrap()),
                 HeaderMap::new(),
-                Query(GoogleStart { locale: "ko".into() }),
+                Query(GoogleStart { locale: "ko".into(), next: next.into() }),
             )
             .await;
             let location = res.headers()[header::LOCATION].to_str().unwrap().to_owned();
@@ -2369,6 +2558,31 @@ mod tests {
 
         fn location(res: &Response) -> &str {
             res.headers()[header::LOCATION].to_str().unwrap()
+        }
+
+        #[tokio::test]
+        async fn google_sign_in_returns_only_to_paths_on_this_site() {
+            for (next, want) in [("/abcd-efgh-ijkm?x=1", "/abcd-efgh-ijkm?x=1"), ("//evil.example", "/"), ("https://evil.example", "/"), ("/\\evil.example", "/"), ("/login/?next=x", "/")] {
+                let nonce = Arc::new(Mutex::new(String::new()));
+                let url = fake_google(Fake { nonce: nonce.clone(), email: "mina@example.com", aud: "client-1" }).await;
+                let state = state(url);
+                let (st, n, cookie) = start_to(&state, next).await;
+                *nonce.lock().unwrap() = n;
+                let res = callback(&state, &st, &cookie).await;
+                assert_eq!(location(&res), want, "next = {next}");
+            }
+        }
+
+        #[tokio::test]
+        async fn canceled_google_sign_in_keeps_the_return_path() {
+            let url = fake_google(Fake { nonce: Arc::new(Mutex::new(String::new())), email: "mina@example.com", aud: "client-1" }).await;
+            let state = state(url);
+            let (st, _, cookie) = start_to(&state, "/abcd-efgh-ijkm").await;
+            let mut headers = HeaderMap::new();
+            headers.insert(header::COOKIE, cookie.parse().unwrap());
+            // 계정 고르기 화면에서 취소하면 Google은 code 없이 state만 돌려준다.
+            let res = google_callback(State(state.clone()), headers, Query(GoogleCallback { code: None, state: Some(st) })).await;
+            assert_eq!(location(&res), "/login?error=google&next=%2Fabcd-efgh-ijkm");
         }
 
         #[tokio::test]
@@ -2395,6 +2609,44 @@ mod tests {
                 .unwrap();
             assert_eq!((verified, name.as_str(), sub.as_str()), (true, "Mina", "g-123"));
             let _ = to_bytes(res.into_body(), 1024).await;
+        }
+
+        #[tokio::test]
+        async fn pending_link_fails_once_the_linking_session_is_gone() {
+            // 연결을 시작한 계정이 그사이 지워지면(또는 로그아웃하면) 끝난 Google 동의가 다른 계정에 붙지 않는다.
+            let nonce = Arc::new(Mutex::new(String::new()));
+            let url = fake_google(Fake { nonce: nonce.clone(), email: "attacker@gmail.com", aud: "client-1" }).await;
+            let state = state(url);
+            let ins = |email: &'static str| {
+                state
+                    .auth
+                    .db()
+                    .blocking(move |c| {
+                        c.execute(
+                            "INSERT INTO users (email, password_hash, email_verified, created_at) VALUES (?1, 'x', 1, 1)",
+                            params![email],
+                        )?;
+                        Ok(c.last_insert_rowid())
+                    })
+                    .unwrap()
+            };
+            let attacker = ins("attacker@x.co");
+            let (gurl, cookie) = google_begin(&state, Some(attacker), "en", "").unwrap();
+            let param = |k: &str| gurl.split(['?', '&']).find_map(|p| p.strip_prefix(&format!("{k}="))).unwrap().to_owned();
+            let (st, n) = (param("state"), param("nonce"));
+            let cookie = cookie.split(';').next().unwrap().to_owned();
+            state.auth.db().blocking(move |c| c.execute("DELETE FROM users WHERE id = ?1", params![attacker])).unwrap();
+            let victim = ins("victim@x.co");
+            assert_ne!(victim, attacker, "ids are not reused");
+            *nonce.lock().unwrap() = n;
+            let res = callback(&state, &st, &cookie).await;
+            assert_eq!(location(&res), "/account/security?error=google");
+            let linked: i64 = state
+                .auth
+                .db()
+                .blocking(|c| c.query_row("SELECT count(*) FROM users WHERE google_sub IS NOT NULL", [], |r| r.get(0)))
+                .unwrap();
+            assert_eq!(linked, 0);
         }
 
         #[tokio::test]
@@ -2450,6 +2702,15 @@ mod tests {
             })
             .unwrap();
         (db, id)
+    }
+
+    #[test]
+    fn names_drop_characters_that_reorder_or_hide_text() {
+        assert_eq!(clean_name(" \u{202E}gnp.exe\u{200B} "), "gnp.exe");
+        assert_eq!(clean_name("Mina\u{2028}Kim"), "MinaKim");
+        assert_eq!(clean_name("\u{3164}"), "");
+        // 이모지 결합(ZWJ)은 남긴다.
+        assert_eq!(clean_name("👩\u{200D}💻"), "👩\u{200D}💻");
     }
 
     #[test]

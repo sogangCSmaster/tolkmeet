@@ -147,11 +147,25 @@ async fn run() {
         let name = if dev_mode { "dev.db" } else { "tolkmeet.db" };
         format!("{}/data/{name}", env!("CARGO_MANIFEST_DIR"))
     });
+    let custom_path = std::env::var_os("DATABASE_PATH").is_some();
     if let Some(dir) = std::path::Path::new(&db_path).parent() {
+        let existed = dir.exists();
         std::fs::create_dir_all(dir).unwrap_or_else(|e| panic!("database dir {}: {e}", dir.display()));
+        // 폴더 권한은 앱 전용 폴더(기본 위치이거나 서버가 새로 만든 폴더)만 좁힌다.
+        // DATABASE_PATH=/srv/x.db처럼 원래 있던 공용 폴더를 잠그지 않게.
+        if !custom_path || !existed {
+            restrict(dir, 0o700);
+        }
     }
     let db = db::Db::open(std::path::Path::new(&db_path))
         .unwrap_or_else(|e| panic!("database {db_path}: {e}"));
+    // 비밀번호 해시·2차 인증 키가 들어 있으므로 서버 계정만 읽게 한다.
+    for suffix in ["", "-wal", "-shm"] {
+        let p = format!("{db_path}{suffix}");
+        if std::path::Path::new(&p).exists() {
+            restrict(std::path::Path::new(&p), 0o600);
+        }
+    }
     // 운영자 계정(HOST_ACCOUNTS·개발용 계정)은 시작할 때마다 DB를 목록에 맞춘다(빠진 계정은 권한을 거둔다).
     auth::sync_operators(&db, &accounts).unwrap_or_else(|e| panic!("operator accounts: {e}"));
     if let Err(e) = meetings::close_orphans(&db) {
@@ -275,6 +289,8 @@ async fn run() {
         .route("/api/billing/{action}", post(meetings::manage))
         .route("/api/paddle/webhook", post(meetings::paddle_webhook))
         .route("/ws", get(ws::handler))
+        // API 응답에는 계정·회의 정보가 들어 있으므로 브라우저·프록시가 저장하지 않게 한다.
+        .layer(axum::middleware::map_response(no_store))
         .layer(axum::middleware::from_fn_with_state(
             state.accounts.origin.clone(),
             same_site_writes,
@@ -322,4 +338,24 @@ async fn same_site_writes(
         }
     }
     next.run(req).await
+}
+
+async fn no_store(mut res: axum::response::Response) -> axum::response::Response {
+    res.headers_mut()
+        .entry(axum::http::header::CACHE_CONTROL)
+        .or_insert(axum::http::HeaderValue::from_static("no-store"));
+    res
+}
+
+/// 파일·폴더 권한을 좁힌다(유닉스). 실패하면 기록만 하고 계속한다.
+fn restrict(path: &std::path::Path, mode: u32) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(e) = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)) {
+            tracing::warn!(error = %e, path = %path.display(), "could not restrict permissions");
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = (path, mode);
 }

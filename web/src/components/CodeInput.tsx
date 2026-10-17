@@ -6,6 +6,7 @@ type Props = {
   /** 6자리를 다 채우면 */
   onComplete?: (v: string) => void
   label: string
+  /** 확인 중에는 입력만 막는다(disabled로 막으면 포커스가 빠져 틀린 뒤 바로 다시 칠 수 없다). */
   disabled?: boolean
   autoFocus?: boolean
 }
@@ -27,7 +28,8 @@ export function CodeInput({ value, onChange, onComplete, label, disabled, autoFo
         autoComplete="one-time-code"
         aria-label={label}
         value={value}
-        disabled={disabled}
+        readOnly={disabled}
+        aria-busy={disabled || undefined}
         autoFocus={autoFocus}
         onChange={(e) => {
           const v = e.target.value.replace(/\D/g, '').slice(0, 6)

@@ -8,8 +8,10 @@ import { useI18n, type MessageKey } from '../lib/i18n'
 import { navigate, parseRoomCode } from '../lib/router'
 import { InLink } from './AuthBits'
 import { BrandMark } from './BrandMark'
+import { LoadBoundary } from './ErrorPages'
 import { Header } from './Header'
 import { Icon } from './Icon'
+import { UnpaidNotice } from './UnpaidNotice'
 
 type Kind = 'meeting' | 'inPerson' | 'live'
 
@@ -100,6 +102,7 @@ function HostHome({ user }: { user: User }) {
   const [creating, setCreating] = useState<Kind | null>(null)
   const [error, setError] = useState<MessageKey | null>(null)
   const [meetings, setMeetings] = useState<{ upcoming: Meeting[]; past: Meeting[] } | null>(null)
+  const [meetingsFailed, setMeetingsFailed] = useState(false)
   const [billing, setBilling] = useState<Billing | null>(null)
   const [scheduling, setScheduling] = useState(false)
   const [done, setDone] = useState<Meeting | null>(null)
@@ -112,7 +115,9 @@ function HostHome({ user }: { user: User }) {
   useEffect(() => {
     let alive = true
     void api.get<{ upcoming: Meeting[]; past: Meeting[] }>('/api/meetings').then((r) => {
-      if (!alive || !r.ok) return
+      if (!alive) return
+      setMeetingsFailed(!r.ok)
+      if (!r.ok) return
       // 홈에는 끝날 시각이 아직 안 된 회의만(시간이 지났지만 링크는 쓸 수 있는 회의는 회의 목록에서 본다).
       const now = Date.now() / 1000
       setMeetings({ ...r.data, upcoming: r.data.upcoming.filter((m) => (m.startsAt ?? 0) + m.durationMin * 60 > now) })
@@ -153,6 +158,14 @@ function HostHome({ user }: { user: User }) {
           {t(error)}
         </p>
       )}
+      {meetingsFailed && (
+        <p className="form-error" role="alert">
+          {t('home.meetingsFailed')}{' '}
+          <button className="link-btn" onClick={() => setN((x) => x + 1)}>
+            {t('room.retry')}
+          </button>
+        </p>
+      )}
       <div className="host-grid">
         <div className="host-col">
           {next ? (
@@ -168,20 +181,23 @@ function HostHome({ user }: { user: User }) {
                 <button className="btn btn-primary" onClick={() => navigate(meetingPath(next))}>
                   {t('home.enterNow')}
                 </button>
-                <button
-                  className="btn btn-glass"
-                  onClick={async () => {
-                    try {
-                      await navigator.clipboard.writeText(`${location.origin}/${next.code}`)
-                      setCopied(true)
-                      setTimeout(() => setCopied(false), 2000)
-                    } catch {
-                      setError('account.failed')
-                    }
-                  }}
-                >
-                  {copied ? t('room.linkCopied') : t('home.copyInvite')}
-                </button>
+                {/* 자막 화면·대면 대화는 주최자 기기에서만 열리므로 보낼 링크가 없다. */}
+                {next.kind === 'meeting' && (
+                  <button
+                    className="btn btn-glass"
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(`${location.origin}/${next.code}`)
+                        setCopied(true)
+                        setTimeout(() => setCopied(false), 2000)
+                      } catch {
+                        setError('account.failed')
+                      }
+                    }}
+                  >
+                    {copied ? t('room.linkCopied') : t('home.copyInvite')}
+                  </button>
+                )}
                 <button className="btn btn-glass" onClick={() => navigate('/meetings')}>
                   {t('home.allMeetings')}
                 </button>
@@ -241,9 +257,15 @@ function HostHome({ user }: { user: User }) {
                         {m.langA && m.langB && ` · ${languageName(m.langA)} ⇄ ${languageName(m.langB)}`}
                       </small>
                     </span>
-                    <button className="btn btn-sm btn-outline" onClick={() => setDone(m)}>
-                      {t('meetings.inviteInfo')}
-                    </button>
+                    {m.kind === 'meeting' ? (
+                      <button className="btn btn-sm btn-outline" onClick={() => setDone(m)}>
+                        {t('meetings.inviteInfo')}
+                      </button>
+                    ) : (
+                      <button className="btn btn-sm btn-outline" onClick={() => navigate(meetingPath(m))}>
+                        {t('home.open')}
+                      </button>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -287,7 +309,7 @@ function HostHome({ user }: { user: User }) {
                       <b>{m.title || t('meetings.untitled')}</b>
                     </span>
                     <small className="muted">
-                      {formatDate(m.startedAt ?? m.createdAt, locale)} · {formatDuration(m.lengthSec, t)}
+                      {formatDate(m.startedAt ?? m.startsAt ?? m.createdAt, locale)} · {formatDuration(m.lengthSec, t)}
                     </small>
                   </li>
                 ))}
@@ -296,25 +318,37 @@ function HostHome({ user }: { user: User }) {
           )}
         </div>
       </div>
-      <Suspense fallback={null}>
-        {scheduling && (
-          <ScheduleDialog
-            meeting={null}
-            onClose={() => setScheduling(false)}
-            onSaved={(m) => {
-              setScheduling(false)
-              setN((x) => x + 1)
-              setDone(m)
-            }}
-          />
-        )}
-        {done && <ScheduledDialog meeting={done} onClose={() => setDone(null)} onToast={() => {}} />}
-      </Suspense>
+      {/* 대화상자 조각을 받지 못해도 홈 전체가 비지 않게 막는다. 실패한 import는 기억되므로 다시 받으려면 새로 고친다. */}
+      <LoadBoundary
+        fallback={
+          <p className="form-error" role="alert">
+            {t('status.loadFailedTitle')}{' '}
+            <button className="link-btn" onClick={() => location.reload()}>
+              {t('status.reload')}
+            </button>
+          </p>
+        }
+      >
+        <Suspense fallback={null}>
+          {scheduling && (
+            <ScheduleDialog
+              meeting={null}
+              onClose={() => setScheduling(false)}
+              onSaved={(m) => {
+                setScheduling(false)
+                setN((x) => x + 1)
+                setDone(m)
+              }}
+            />
+          )}
+          {done && <ScheduledDialog meeting={done} onClose={() => setDone(null)} />}
+        </Suspense>
+      </LoadBoundary>
     </main>
   )
 }
 
-/** 이번 달 번역 시간: 남은 비율 고리 + 남은 시간 */
+/** 이번 결제 기간의 번역 시간: 남은 비율 고리 + 남은 시간 + 다시 채워지는 날 */
 function UsageRing({ billing }: { billing: Billing }) {
   const { t, locale } = useI18n()
   const total = billing.includedSec + billing.extraSec
@@ -332,7 +366,7 @@ function UsageRing({ billing }: { billing: Billing }) {
       </svg>
       <div>
         <p className="usage-label" id="usage-title">
-          {t('home.thisMonth')}
+          {t('home.thisPeriod')}
         </p>
         <p className="usage-left">{t('home.left', { time: formatDuration(billing.remainingSec, t) })}</p>
         <p className="muted">
@@ -341,6 +375,7 @@ function UsageRing({ billing }: { billing: Billing }) {
         <InLink to="/checkout?item=hours" className="auth-link">
           {t('account.addHours')}
         </InLink>
+        {billing.pastDue && <UnpaidNotice />}
       </div>
     </section>
   )

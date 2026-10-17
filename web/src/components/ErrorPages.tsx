@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { Component, useState, type ReactNode } from 'react'
 import { useAuth } from '../lib/auth'
 import { useI18n } from '../lib/i18n'
 import { chromeIntentUrl } from '../lib/inapp'
@@ -18,6 +18,44 @@ export function NotFoundPage() {
         <button className="btn btn-primary" onClick={() => navigate('/')}>
           {t('room.home')}
         </button>
+      }
+    />
+  )
+}
+
+/**
+ * 지연 로딩한 화면(로그인·계정 등)의 조각 파일을 받지 못했거나 그 화면이 그리다 실패했을 때 앱 전체가 비지 않게 막는다.
+ * 화면을 옮길 때 key를 바꿔 다시 시도한다. onError는 오류 화면을 보인 뒤 불린다(받지 못한 조각 파일을 다음에 다시 받게 해 둔다).
+ */
+export class LoadBoundary extends Component<{ children: ReactNode; fallback: ReactNode; onError?: () => void }, { failed: boolean }> {
+  state = { failed: false }
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+  componentDidCatch() {
+    this.props.onError?.()
+  }
+  render() {
+    return this.state.failed ? this.props.fallback : this.props.children
+  }
+}
+
+export function LoadFailedPage() {
+  const { t } = useI18n()
+  return (
+    <StatusPage
+      icon="info"
+      title={t('status.loadFailedTitle')}
+      body={t('status.loadFailedBody')}
+      actions={
+        <>
+          <button className="btn btn-outline" onClick={() => navigate('/')}>
+            {t('room.home')}
+          </button>
+          <button className="btn btn-primary" onClick={() => location.reload()}>
+            {t('status.reload')}
+          </button>
+        </>
       }
     />
   )

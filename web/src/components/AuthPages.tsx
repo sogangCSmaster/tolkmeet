@@ -1,12 +1,12 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { api, login } from '../lib/api'
-import { refreshAuth, useFeatures } from '../lib/auth'
+import { refreshAuth, useAuth, useFeatures } from '../lib/auth'
 import { useI18n, type MessageKey } from '../lib/i18n'
 import '../lib/i18nPages'
 import { legalUrl } from '../lib/links'
-import { loginWithPasskey, passkeySupported } from '../lib/passkey'
-import { clearPendingSignup, pendingPassword, setPendingSignup } from '../lib/pendingSignup'
-import { navigate, queryParam, replacePath } from '../lib/router'
+import { loginWithPasskey, passkeySupported, type PasskeyResult } from '../lib/passkey'
+import { clearPendingSignup, justSent, pendingPassword, setPendingSignup } from '../lib/pendingSignup'
+import { authPath, navigate, nextParam, queryParam, replacePath, withNext } from '../lib/router'
 import { AuthLayout, AuthSwitch, Divider, GoogleButton, InLink } from './AuthBits'
 import { BrandMark } from './BrandMark'
 import { CodeInput } from './CodeInput'
@@ -28,53 +28,87 @@ function messageFor(code: string): MessageKey {
       return 'auth.rateLimited'
     case 'locked':
       return 'auth.locked'
+    case 'busy':
+      return 'auth.busy'
     default:
       return 'auth.failed'
   }
 }
 
+/** 패스키 로그인 결과 → 문구(성공·창 닫음은 없음) */
+function passkeyMessage(r: PasskeyResult): MessageKey | null {
+  return r === 'failed' ? 'auth.passkeyFailed' : r === 'limited' ? 'auth.rateLimited' : r === 'error' ? 'auth.failed' : null
+}
+
+/** 로그인되면 가려던 곳(?next=, 없으면 홈)으로. 기록을 바꿔 치워 뒤로 가기가 로그인 화면으로 돌아가지 않게 한다. */
 async function enterApp() {
+  // 로그인 상태가 바뀌면 화면(useGuestOnly)도 같은 곳으로 보내므로, 주소가 바뀌기 전에 갈 곳을 정해 둔다.
+  const to = nextParam() ?? '/'
   await refreshAuth()
-  navigate('/')
+  replacePath(to)
+}
+
+/** 이미 로그인한 주최자가 로그인·가입 화면에 오면 가려던 곳(없으면 홈)으로 보낸다. */
+function useGuestOnly(): boolean {
+  const auth = useAuth()
+  const [page] = useState(() => location.pathname)
+  useEffect(() => {
+    // 이미 보냈으면(효과가 한 번 더 돌 때) 다시 보내지 않는다.
+    if (auth.status === 'host' && location.pathname === page) replacePath(nextParam() ?? '/')
+  }, [auth.status, page])
+  return auth.status === 'host'
 }
 
 // ── 로그인 ────────────────────────────────────────────
 
 export function Login() {
+  const isHost = useGuestOnly()
   // Google 로그인 뒤 2차 인증이 필요하면 서버가 ?mfa=티켓으로 돌려보낸다.
   const [ticket, setTicket] = useState<string | null>(() => queryParam('mfa'))
   const googleFailed = queryParam('error') === 'google'
   useEffect(() => {
-    if (queryParam('mfa') || queryParam('error')) replacePath('/login')
+    if (queryParam('mfa') || queryParam('error')) replacePath(withNext('/login', nextParam()))
   }, [])
+  if (isHost) return <div className="shell" />
   return ticket ? <MfaStep ticket={ticket} onRestart={() => setTicket(null)} /> : <PasswordStep onMfa={setTicket} googleFailed={googleFailed} />
 }
 
 function PasswordStep({ onMfa, googleFailed }: { onMfa: (ticket: string) => void; googleFailed: boolean }) {
   const { t } = useI18n()
   const feat = useFeatures()
-  const [email, setEmail] = useState('')
+  // 인증 화면의 "이미 인증하셨나요? 로그인"에서 오면 주소를 채워 둔다.
+  const [email, setEmail] = useState(() => queryParam('email') ?? '')
   const [password, setPassword] = useState('')
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<MessageKey | null>(googleFailed ? 'auth.googleFailed' : null)
+  /** 비밀번호는 맞고 메일 인증이 남은 주소 */
+  const [unverified, setUnverified] = useState<string | null>(null)
 
   async function submit(e: FormEvent) {
     e.preventDefault()
     setPending(true)
     setError(null)
-    const r = await login(email.trim(), password)
+    const addr = email.trim()
+    const r = await login(addr, password)
     if (r.kind === 'ok') return enterApp()
     setPending(false)
     if (r.kind === 'mfa') return onMfa(r.ticket)
+    if (r.kind === 'unverified') {
+      // 인증 화면에서 비밀번호를 다시 묻지 않게 메모리에만 들고 간다. 코드는 예전 것이라 바로 다시 보낼 수 있게 한다.
+      setPendingSignup(addr.toLowerCase(), password, false)
+      setUnverified(addr.toLowerCase())
+    }
     setPassword('')
-    setError(r.kind === 'invalid' || r.kind === 'unverified' ? 'auth.invalid' : r.kind === 'locked' ? 'auth.locked' : 'auth.failed')
+    setError(
+      r.kind === 'invalid' ? 'auth.invalid' : r.kind === 'locked' ? 'auth.locked' : r.kind === 'busy' ? 'auth.busy' : r.kind === 'unverified' ? 'auth.unverified' : 'auth.failed',
+    )
   }
 
   async function passkey() {
     setError(null)
     const r = await loginWithPasskey()
     if (r === 'ok') return enterApp()
-    if (r === 'failed') setError('auth.passkeyFailed')
+    setError(passkeyMessage(r))
   }
 
   return (
@@ -104,6 +138,14 @@ function PasswordStep({ onMfa, googleFailed }: { onMfa: (ticket: string) => void
         {error && (
           <p className="form-error" role="alert">
             {t(error)}
+            {error === 'auth.unverified' && unverified && (
+              <>
+                {' '}
+                <InLink to={withNext(`/verify?email=${encodeURIComponent(unverified)}`, nextParam())} className="link-btn">
+                  {t('auth.verifyNow')}
+                </InLink>
+              </>
+            )}
           </p>
         )}
         <button className="btn btn-primary btn-lg" disabled={pending || !email.trim() || !password}>
@@ -143,23 +185,26 @@ function MfaStep({ ticket, onRestart }: { ticket: string; onRestart: () => void 
     const r = await api.post('/api/login/mfa', { ticket, code: value, remember })
     if (r.ok) return enterApp()
     setPending(false)
-    setCode('')
     // 이 로그인의 횟수를 다 썼으면 다시 로그인하라고(버튼), 사용자 한도에 걸렸으면 나중에 다시 하라고 알린다.
-    setError(
+    // 네트워크·서버 오류는 틀린 코드가 아니므로 코드를 남겨 두고 다시 보내게 한다.
+    const key: MessageKey =
       r.status === 401 && r.code === 'expired'
         ? 'mfa.expired'
-        : r.status === 429
-          ? r.code === 'ticket_spent'
-            ? 'mfa.tooMany'
-            : 'mfa.locked'
-          : 'mfa.wrong',
-    )
+        : r.status === 401 && r.code === 'code'
+          ? 'mfa.wrong'
+          : r.status === 429
+            ? r.code === 'ticket_spent'
+              ? 'mfa.tooMany'
+              : 'mfa.locked'
+            : 'auth.failed'
+    if (key !== 'auth.failed') setCode('')
+    setError(key)
   }
 
   async function passkey() {
     const r = await loginWithPasskey()
     if (r === 'ok') return enterApp()
-    if (r === 'failed') setError('auth.passkeyFailed')
+    setError(passkeyMessage(r))
   }
 
   return (
@@ -202,7 +247,7 @@ function MfaStep({ ticket, onRestart }: { ticket: string; onRestart: () => void 
             {t(error)}
           </p>
         )}
-        {(recovery || error === 'mfa.wrong') && (
+        {(recovery || error === 'mfa.wrong' || error === 'auth.failed') && (
           <button className="btn btn-primary btn-lg" disabled={pending || code.trim().length < 6}>
             {t('mfa.submit')}
           </button>
@@ -238,6 +283,7 @@ function MfaStep({ ticket, onRestart }: { ticket: string; onRestart: () => void 
 
 export function Signup() {
   const { t, locale } = useI18n()
+  const isHost = useGuestOnly()
   const feat = useFeatures()
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
@@ -256,9 +302,10 @@ export function Signup() {
     setPending(false)
     if (!r.ok) return setError(messageFor(r.code))
     setPendingSignup(addr, password)
-    navigate(`/verify?email=${encodeURIComponent(addr)}`)
+    navigate(withNext(`/verify?email=${encodeURIComponent(addr)}`, nextParam()))
   }
 
+  if (isHost) return <div className="shell" />
   return (
     <AuthLayout>
       <form className="auth-card" onSubmit={submit}>
@@ -338,19 +385,25 @@ const RESEND_WAIT = 60
 
 export function Verify() {
   const { t } = useI18n()
-  const email = (queryParam('email') ?? '').trim().toLowerCase()
+  const fromUrl = (queryParam('email') ?? '').trim().toLowerCase()
+  // 주소 없이 들어오면(주소창에 직접 입력 등) 가입한 주소부터 묻는다.
+  const [email, setEmail] = useState(fromUrl)
+  const addr = email.trim().toLowerCase()
   const [code, setCode] = useState(() => (queryParam('code') ?? '').replace(/\D/g, '').slice(0, 6))
-  // 가입 화면에서 바로 왔으면 비밀번호를 메모리에 들고 있다. 메일 링크로 왔으면 한 번 더 묻는다.
-  const remembered = pendingPassword(email)
-  const [password, setPassword] = useState(remembered ?? '')
+  // 가입 화면(또는 로그인)에서 바로 왔으면 비밀번호를 메모리에 들고 있다. 메일 링크로 왔으면 한 번 더 묻는다.
+  const [password, setPassword] = useState(() => pendingPassword(fromUrl) ?? '')
+  const [askPassword, setAskPassword] = useState(() => !pendingPassword(fromUrl))
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<MessageKey | null>(null)
   const [notice, setNotice] = useState<MessageKey | null>(null)
-  const [wait, setWait] = useState(RESEND_WAIT)
+  // 방금 코드를 보냈을 때만 다시 보내기를 잠깐 막는다.
+  const [wait, setWait] = useState(() => (justSent(fromUrl) ? RESEND_WAIT : 0))
+  // 로그인에서 "인증 안 됨"으로 넘어왔으면 방금 보낸 코드가 없다(예전 메일의 코드를 넣거나 새로 받게 한다).
+  const [fromLogin] = useState(() => !!pendingPassword(fromUrl) && !justSent(fromUrl))
   // 메일 링크의 코드가 주소창·기록에 남지 않게 지운다(값은 상태에 들고 있다).
   useEffect(() => {
-    if (queryParam('code')) replacePath(`/verify?email=${encodeURIComponent(email)}`)
-  }, [email])
+    if (queryParam('code')) replacePath(withNext(fromUrl ? `/verify?email=${encodeURIComponent(fromUrl)}` : '/verify', nextParam()))
+  }, [fromUrl])
 
   useEffect(() => {
     if (wait <= 0) return
@@ -359,23 +412,31 @@ export function Verify() {
   }, [wait])
 
   async function submit(value = code) {
-    if (pending || value.length !== 6 || !password) return
+    if (pending || value.length !== 6 || !password || !EMAIL.test(addr)) return
     setPending(true)
     setError(null)
-    const r = await api.post('/api/verify', { email, code: value, password })
+    const r = await api.post('/api/verify', { email: addr, code: value, password })
     if (r.ok) {
       clearPendingSignup()
       return enterApp()
     }
     setPending(false)
-    setError(r.code === 'password' ? 'verify.wrongPassword' : 'verify.wrongCode')
-    if (r.code !== 'password') setCode('')
+    if (r.code === 'password') {
+      // 코드는 맞았는데 들고 온 비밀번호가 가입 때 것과 다르다. 지우고 직접 넣게 한다(코드는 그대로 둔다).
+      clearPendingSignup()
+      setPassword('')
+      setAskPassword(true)
+      setError('verify.wrongPassword')
+    } else if (r.code === 'code') {
+      setCode('')
+      setError('verify.wrongCode')
+    } else setError(r.code === 'rate_limited' ? 'auth.rateLimited' : 'account.failed')
   }
 
   async function resend() {
     setWait(RESEND_WAIT)
     setError(null)
-    const r = await api.post('/api/verify/resend', { email })
+    const r = await api.post('/api/verify/resend', { email: addr })
     setNotice(r.ok ? 'verify.resent' : messageFor(r.code))
   }
 
@@ -392,14 +453,18 @@ export function Verify() {
           <Icon name="mail" />
         </span>
         <h1>{t('verify.title')}</h1>
-        <p className="lead">
-          <Rich text={t('verify.sent')} parts={{ email: <b>{email}</b> }} />
-        </p>
-        <CodeInput value={code} onChange={setCode} onComplete={(v) => void submit(v)} label={t('verify.code')} disabled={pending} autoFocus={!!remembered} />
-        {!remembered && (
+        <p className="lead">{fromUrl ? <Rich text={t(fromLogin ? 'verify.sentEarlier' : 'verify.sent')} parts={{ email: <b>{fromUrl}</b> }} /> : t('verify.enterEmail')}</p>
+        {!fromUrl && (
+          <label className="field-label">
+            {t('auth.email')}
+            <input className="input" type="email" autoComplete="email" autoCapitalize="none" spellCheck={false} required autoFocus value={email} onChange={(e) => setEmail(e.target.value)} />
+          </label>
+        )}
+        <CodeInput value={code} onChange={setCode} onComplete={(v) => void submit(v)} label={t('verify.code')} disabled={pending} autoFocus={!askPassword && !!fromUrl} />
+        {askPassword && (
           <label className="field-label">
             {t('verify.passwordPrompt')}
-            <input className="input" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus />
+            <input className="input" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus={!!fromUrl} />
           </label>
         )}
         {error && (
@@ -407,13 +472,23 @@ export function Verify() {
             {t(error)}
           </p>
         )}
+        {/* 이미 연 계정도 서버는 틀린 코드와 같게 답한다(주소가 가입돼 있는지 드러내지 않으려고). 그래서 로그인 길을 함께 보인다. */}
+        {error === 'verify.wrongCode' && (
+          <p className="form-note">
+            {t('verify.alreadyVerified')}{' '}
+            <InLink to={withNext(addr ? `/login?email=${encodeURIComponent(addr)}` : '/login', nextParam())} className="link-btn">
+              {t('auth.hostLogin')}
+            </InLink>
+          </p>
+        )}
         {notice && !error && (
           <p className="form-note" role="status">
             {t(notice)}
           </p>
         )}
-        {(!remembered || error === 'verify.wrongPassword') && (
-          <button className="btn btn-primary btn-lg" disabled={pending || code.length !== 6 || !password}>
+        {/* 코드를 다 넣으면 바로 보내므로 버튼은 필요할 때만 보인다. 틀린 코드 말고는 코드가 남아 있어 다시 보낼 길이 있어야 한다. */}
+        {(askPassword || !fromUrl || (!!error && error !== 'verify.wrongCode')) && (
+          <button className="btn btn-primary btn-lg" disabled={pending || code.length !== 6 || !password || !EMAIL.test(addr)}>
             {t('verify.submit')}
           </button>
         )}
@@ -426,12 +501,12 @@ export function Verify() {
           {wait > 0 ? (
             <span>{t('verify.resendIn', { n: String(wait) })}</span>
           ) : (
-            <button type="button" className="link-btn" onClick={() => void resend()}>
+            <button type="button" className="link-btn" disabled={!EMAIL.test(addr)} onClick={() => void resend()}>
               {t('verify.resend')}
             </button>
           )}
           {' · '}
-          <InLink to="/signup">{t('verify.changeEmail')}</InLink>
+          <InLink to={authPath('/signup')}>{t('verify.changeEmail')}</InLink>
         </p>
       </form>
     </AuthLayout>

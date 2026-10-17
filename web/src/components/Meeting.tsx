@@ -41,7 +41,10 @@ export function Meeting({ code, onRejoin }: { code: string; onRejoin: () => void
 
   // 입장에 끝내 실패하면(거절 등) 장치를 놓는다. "다시 시도"는 Meeting을 새로 마운트해 다시 잡는다.
   const [gaveUp, setGaveUp] = useState(false)
-  const captureNeeded = room !== null && stage !== 'left' && !gaveUp
+  // 대면 대화·자막 화면은 주최자 기기에서만 돈다(로비가 안내한다). 그런 회의로 알려지면 카메라·마이크를 잡지 않고,
+  // 이미 잡은 것은 아래 정리에서 놓는다. 종류를 모르는 동안(일반 회의 포함)은 회의 정보를 기다리지 않고 병렬로 잡는다.
+  const hostOnly = !!room?.kind && room.kind !== 'meeting'
+  const captureNeeded = room !== null && !hostOnly && stage !== 'left' && !gaveUp
   useEffect(() => {
     if (!captureNeeded) return
     let cancelled = false
@@ -53,6 +56,10 @@ export function Meeting({ code, onRejoin }: { code: string; onRejoin: () => void
       }
       acquired = result.stream
       setLocal(result)
+      // 잡지 못한 장치는 끈 상태로 둔다(카메라 없는 게스트·듣기만 하는 게스트가 켜진 것으로 알려지지 않게).
+      const hasMic = result.stream.getAudioTracks().length > 0
+      const hasCam = result.stream.getVideoTracks().length > 0
+      setMedia((m) => ({ ...m, mic: m.mic && hasMic, cam: m.cam && hasCam }))
     })
     return () => {
       cancelled = true
@@ -84,7 +91,7 @@ export function Meeting({ code, onRejoin }: { code: string; onRejoin: () => void
   }
 
   const micBlocked = local?.error?.device === 'both' && local.error.kind === 'denied'
-  if (stage === 'lobby' && micBlocked && !listenOnly) {
+  if (stage === 'lobby' && micBlocked && !listenOnly && !hostOnly) {
     return <MicBlockedPage onRetry={onRejoin} onListenOnly={() => setListenOnly(true)} />
   }
 

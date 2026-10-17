@@ -601,19 +601,90 @@ async fn disabling_translation_retracts_pending_captions() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn departing_speaker_retracts_pending_captions() {
+async fn departing_speaker_keeps_finished_sentences_and_retracts_only_interim() {
     let (room, _host_rx, mut guests) = room(&["ja"]);
     let (p, _fake) = pipeline(&room, Fake::new(vec![ms(1000)]));
     let speaker = p.speaker(room.code.clone(), room.host.clone());
-    speaker.push(0, "pending.".into(), true);
+    speaker.push(0, "finished.".into(), true);
     wait(10).await;
-    let first = captions(&mut guests[0]).pop().unwrap();
+    speaker.push(1, "still talking".into(), false);
+    wait(10).await;
+    let before = captions(&mut guests[0]);
+    let seg_of = |src: &str| before.iter().find(|c| c.src == src).unwrap().seg.clone();
+    let (finished, open) = (seg_of("finished."), seg_of("still talking"));
+    // 번역이 끝나기 전에 화자가 나간다(연결이 끊긴 경우도 같다).
     room.rooms.leave(&room.code, &room.host);
     drop(speaker);
     wait(10).await;
-    let retracted = captions(&mut guests[0]).pop().unwrap();
-    assert_eq!(first.seg, retracted.seg);
-    assert!(retracted.is_final && retracted.src.is_empty());
+    let after = captions(&mut guests[0]);
+    let last = |seg: &str| after.iter().rfind(|c| c.seg == seg).unwrap();
+    // 말하던 중인 글자는 바로 지운다.
+    assert!(last(&open).is_final && last(&open).src.is_empty());
+    // 이미 말을 마친 문장은 번역이 끝나면 남은 사람에게 마저 보낸다.
+    wait(1500).await;
+    assert_eq!(
+        captions(&mut guests[0]).last().unwrap(),
+        &Cap {
+            seg: finished.clone(),
+            src: "finished.".into(),
+            tgt_lang: "ja".into(),
+            text: Some("[ja] finished.".into()),
+            is_final: true,
+        }
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn last_words_without_a_period_are_kept_when_the_speaker_leaves_at_once() {
+    let (room, _host_rx, mut guests) = room(&["ja"]);
+    let (p, _fake) = pipeline(&room, Fake::new(vec![ms(500)]));
+    let speaker = p.speaker(room.code.clone(), room.host.clone());
+    // 확정 결과지만 마침표가 없어 문장 확정을 기다리는 중(FLUSH_AFTER 전)에 나간다.
+    speaker.push(0, "네 그럼 다음에 봬요".into(), true);
+    wait(10).await;
+    room.rooms.leave(&room.code, &room.host);
+    drop(speaker);
+    wait(1000).await;
+    let last = captions(&mut guests[0]).pop().unwrap();
+    assert_eq!(last.src, "네 그럼 다음에 봬요");
+    assert_eq!(last.text.as_deref(), Some("[ja] 네 그럼 다음에 봬요"));
+    assert!(last.is_final);
+}
+
+#[tokio::test(start_paused = true)]
+async fn departed_speakers_slow_translation_ends_as_the_original() {
+    let (room, _host_rx, mut guests) = room(&["ja"]);
+    let (p, _fake) = pipeline(&room, Fake::new(vec![Duration::from_secs(60)]));
+    let speaker = p.speaker(room.code.clone(), room.host.clone());
+    speaker.push(0, "finished.".into(), true);
+    wait(10).await;
+    let seg = captions(&mut guests[0]).pop().unwrap().seg;
+    room.rooms.leave(&room.code, &room.host);
+    drop(speaker);
+    // 기다리는 시간이 지나면 번역 없이 원문으로 확정한다.
+    wait(6000).await;
+    assert_eq!(
+        captions(&mut guests[0]).last().unwrap(),
+        &Cap { seg, src: "finished.".into(), tgt_lang: "ja".into(), text: None, is_final: true }
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn translation_progress_goes_only_to_readers_of_that_language() {
+    let (room, _host_rx, mut guests) = room(&["ja", "en"]);
+    // Target scheduling is sorted: English is slow, Japanese finishes first.
+    let (p, _fake) = pipeline(&room, Fake::new(vec![Duration::from_secs(30), ms(100)]));
+    let speaker = p.speaker(room.code.clone(), room.host.clone());
+    speaker.push(0, "번역 중.".into(), true);
+    wait(10).await;
+    assert_eq!(captions(&mut guests[0]).len(), 1);
+    assert_eq!(captions(&mut guests[1]).len(), 1);
+    wait(200).await;
+    assert!(captions(&mut guests[0]).last().unwrap().is_final);
+    assert!(
+        captions(&mut guests[1]).is_empty(),
+        "the English reader's line did not change"
+    );
 }
 
 fn bounded_room() -> (Room, Inbox, Arc<Notify>) {

@@ -14,7 +14,6 @@ use rand::RngExt;
 use tokio::sync::{Notify, mpsc, watch};
 
 use crate::ice::Ice;
-use crate::limit::TokenBucket;
 use crate::protocol::{
     ErrorCode, Knock, MediaState, NoticeCode, Peer, PeerId, RoomSettings, ServerMsg, SignalData,
 };
@@ -33,8 +32,20 @@ pub const RESUME_TTL: Duration = Duration::from_secs(2 * 60);
 /// 연결이 아니라 참가자에 묶는다: 재입장 토큰으로 연결만 바꿔 가며 새 한도를 받지 못하게.
 pub const STT_TOKENS_PER_SEC: f64 = 1.0 / 30.0;
 pub const STT_TOKEN_BURST: f64 = 4.0;
-/// 혼자 있는 방(대면 대화·자막 화면)은 이 시간 안에 번역을 썼을 때만 번역 시간으로 센다.
-const SOLO_ACTIVE: Duration = Duration::from_secs(90);
+/// 말(음성 인식 글자) 없이 받는 토큰은 더 묶는다: 말 없이 쓰는 세션은 번역 시간으로 세지 않으므로(말이 없으면 세지 않는 규칙),
+/// 고친 화면이 토큰만 받아 글자를 보내지 않으면 무료로 쓰게 된다. 정직한 화면은 말이 없어도 세션을 미리 열어 두고
+/// 3분 쉬면 새로 바꾼다(web/src/lib/stt.ts IDLE_ROTATE_MS): 3분에 1개. 처음·언어 바꾸기·연결이 몇 번 끊긴 몫으로 6개까지 더 받는다.
+/// 글자가 오면 다시 찬다(말하는 사람은 일반 한도만 받는다). 세션은 15분까지 가므로 말 없는 세션은 참가자당 몇 개로 묶인다.
+const TEXTLESS_TOKENS_PER_SEC: f64 = 1.0 / 180.0;
+const TEXTLESS_TOKEN_BURST: f64 = 6.0;
+/// 발급에 실패한 토큰의 일반 몫을 돌려주는 횟수(10분에 2번). 실패를 일부러 일으키는(이상한 언어 태그, 공유 키의 429) 화면이
+/// 돌려받은 한도로 Gemini를 끝없이 부르지 못하게 묶고, 가끔 생기는 실패만 정직한 화면에 돌려준다.
+const STT_REFUNDS_PER_SEC: f64 = 2.0 / 600.0;
+const STT_REFUND_BURST: f64 = 2.0;
+/// 번역 시간은 누군가 실제로 말한 뒤 이 시간까지만 센다(인원과 상관없이: 말없이 켜 둔 회의는 주최자의 시간을 쓰지 않는다).
+const SPEECH_ACTIVE: Duration = Duration::from_secs(90);
+/// 주최자 계정으로 들어온 사람이 이만큼 없으면 남은 사람의 음성 인식·번역을 멈춘다(주최자 없이 그의 시간을 계속 쓰지 않게).
+pub const HOST_AWAY: Duration = Duration::from_secs(10 * 60);
 
 /// 혼동하기 쉬운 문자(l, o, 0, 1)를 뺀 32자. 4-4-4 형식이면 60bit.
 const CODE_ALPHABET: &[u8] = b"abcdefghijkmnpqrstuvwxyz23456789";
@@ -68,11 +79,76 @@ struct Member {
     caption_epoch: u64,
     peer: Peer,
     tx: Outbox,
-    stt_tokens: TokenBucket,
+    stt_tokens: SttLimits,
 }
 
-fn new_stt_tokens() -> TokenBucket {
-    TokenBucket::new(STT_TOKENS_PER_SEC, STT_TOKEN_BURST)
+/// 참가자 한 명의 음성 인식 토큰 한도: 모든 토큰, 그리고 마지막으로 말한 뒤의 토큰.
+/// 두 한도를 모두 본 뒤에만 쓰고(거절된 요청이 한도를 쓰지 않게), 발급에 실패하면 돌려준다.
+#[derive(Clone)]
+struct SttLimits {
+    all: Bucket,
+    textless: Bucket,
+    refunds: Bucket,
+}
+
+impl SttLimits {
+    fn take(&mut self, now: Instant) -> bool {
+        let ready = self.all.ready(now) & self.textless.ready(now);
+        if ready {
+            self.all.tokens -= 1.0;
+            self.textless.tokens -= 1.0;
+        }
+        ready
+    }
+
+    /// 발급에 실패한 토큰: 세션이 열리지 않았으므로 말 없는 몫은 언제나 돌려준다(긴 장애 뒤에도 바로 다시 받게).
+    /// Gemini를 부르는 횟수인 일반 몫은 돌려주는 횟수를 묶는다.
+    fn give_back(&mut self, now: Instant) {
+        self.textless.give_back();
+        if self.refunds.ready(now) {
+            self.refunds.tokens -= 1.0;
+            self.all.give_back();
+        }
+    }
+
+    /// 말한 글자가 왔다: 말 없는 토큰 한도를 다시 채운다.
+    fn spoke(&mut self) {
+        self.textless.tokens = self.textless.burst;
+    }
+}
+
+/// 초당 `rate`개, 최대 `burst`개(limit::TokenBucket과 같고, 먼저 볼 수 있고 돌려줄 수 있다).
+#[derive(Clone)]
+struct Bucket {
+    rate: f64,
+    burst: f64,
+    tokens: f64,
+    at: Instant,
+}
+
+impl Bucket {
+    fn new(rate: f64, burst: f64) -> Self {
+        Bucket { rate, burst, tokens: burst, at: Instant::now() }
+    }
+
+    fn ready(&mut self, now: Instant) -> bool {
+        let elapsed = now.saturating_duration_since(self.at).as_secs_f64();
+        self.tokens = (self.tokens + elapsed * self.rate).min(self.burst);
+        self.at = now;
+        self.tokens >= 1.0
+    }
+
+    fn give_back(&mut self) {
+        self.tokens = (self.tokens + 1.0).min(self.burst);
+    }
+}
+
+fn new_stt_tokens() -> SttLimits {
+    SttLimits {
+        all: Bucket::new(STT_TOKENS_PER_SEC, STT_TOKEN_BURST),
+        textless: Bucket::new(TEXTLESS_TOKENS_PER_SEC, TEXTLESS_TOKEN_BURST),
+        refunds: Bucket::new(STT_REFUNDS_PER_SEC, STT_REFUND_BURST),
+    }
 }
 
 struct Room {
@@ -81,8 +157,10 @@ struct Room {
     caption_epoch: u64,
     caption_changes: watch::Sender<u64>,
     members: HashMap<PeerId, Member>,
-    waiting: HashMap<PeerId, Member>,
-    /// 방이 비게 된 시점(생성 직후 포함). 사람이 있으면 None.
+    /// 도착 순서대로(주최자에게 먼저 온 사람부터 보인다). 최대 `MAX_WAITING`명이라 찾기는 훑어도 된다.
+    waiting: Vec<Member>,
+    /// 입장한 참가자가 없어진 시점(생성 직후 포함). 입장한 참가자가 있으면 None.
+    /// 대기 중인 게스트만으로는 방이 유지되지 않는다(방을 지울 때 그들에게 알린다).
     idle_since: Option<Instant>,
     /// 재입장 토큰 → 참가자. 입장할 때 하나씩 발급하고, 쓰면 없어진다.
     resumes: HashMap<String, Resume>,
@@ -90,11 +168,19 @@ struct Room {
     /// 입장·퇴장·번역 켜고 끄기마다 그 앞까지를 쌓는다(주기 측정 순간의 상태만 보면 그 순간만 피해 갈 수 있다).
     metered_at: Instant,
     unreported: f64,
-    /// 마지막으로 번역을 실제로 쓴 때(음성 인식 토큰을 받거나 자막을 번역함). 혼자 쓰는 대면·자막 화면도 세려고.
+    /// 마지막으로 누군가 실제로 말한 때(음성 인식 글자가 도착함). 번역 시간은 이것으로 센다.
+    /// 토큰 발급은 세지 않는다: 말하지 않아도 세션을 미리 열고 몇 분마다 바꾼다.
     used_at: Option<Instant>,
+    /// 주최자 계정으로 들어온 사람이 모두 나간 때(방을 만든 뒤 아직 안 들어온 경우 포함). 있으면 None.
+    host_left_at: Option<Instant>,
+    /// 남은 사람에게 주최자가 없다고(`HostAway`) 알렸는지
+    host_away_told: bool,
     /// 측정할 때 본 최대 인원과 마지막으로 보고한 값
     peak: usize,
     reported_peak: usize,
+    /// 예약 회의 방. 주최자보다 먼저 와서 기다리는 게스트가 있으면 지우지 않는다
+    /// (늦는 주최자를 기다리던 사람에게 회의가 없어졌다고 알리지 않게).
+    reserved: bool,
 }
 
 struct Resume {
@@ -104,7 +190,7 @@ struct Resume {
     /// 그 참가자가 나간 시점. 아직 입장해 있으면 None(끊긴 걸 서버가 아직 모르는 경우 포함).
     left_at: Option<Instant>,
     /// 나갈 때 남은 음성 인식 토큰 한도. 다시 들어오면 이어 받는다.
-    stt_tokens: Option<TokenBucket>,
+    stt_tokens: Option<SttLimits>,
 }
 
 impl Room {
@@ -116,32 +202,48 @@ impl Room {
             caption_epoch: 0,
             caption_changes: watch::channel(0).0,
             members: HashMap::new(),
-            waiting: HashMap::new(),
+            waiting: Vec::new(),
             resumes: HashMap::new(),
             idle_since: Some(now),
             metered_at: now,
             unreported: 0.0,
             used_at: None,
+            host_left_at: Some(now),
+            host_away_told: false,
             peak: 0,
             reported_peak: 0,
+            reserved: false,
         }
     }
 
-    /// 지난 측정부터 지금까지를 쌓는다. 번역이 켜져 있고, 두 명 이상이거나 혼자라도 방금 번역을 썼으면 센다.
+    /// 지난 측정부터 지금까지를 쌓는다. 번역이 켜져 있을 때 마지막으로 말한 뒤 `SPEECH_ACTIVE`까지만 세고,
+    /// 주최자가 `HOST_AWAY`보다 오래 없으면 그 뒤로는 세지 않는다.
     /// `blocked`: 주최자의 번역 시간이 떨어져 자막을 막는 중이면 세지 않는다(쓴 시간을 부풀리지 않게).
+    /// 세는 조건이 바뀌는 곳(입장·퇴장·설정·막힘)마다 바뀌기 전에 부른다.
     fn accrue(&mut self, now: Instant, blocked: bool) {
-        let elapsed = now.saturating_duration_since(self.metered_at).as_secs_f64();
-        self.metered_at = now;
-        let solo_active = self
-            .used_at
-            .is_some_and(|t| now.saturating_duration_since(t) < SOLO_ACTIVE);
-        if !blocked
-            && self.settings.translation
-            && !self.members.is_empty()
-            && (self.members.len() >= 2 || solo_active)
-        {
-            self.unreported += elapsed;
+        let from = std::mem::replace(&mut self.metered_at, now);
+        if blocked || !self.settings.translation || self.members.is_empty() {
+            return;
         }
+        let Some(spoke) = self.used_at else { return };
+        let mut until = (spoke + SPEECH_ACTIVE).min(now);
+        if let Some(left) = self.host_left_at {
+            until = until.min(left + HOST_AWAY);
+        }
+        self.unreported += until.saturating_duration_since(from).as_secs_f64();
+    }
+
+    /// 남은 사람에게 주최자가 없다고 한 번 알린다(`except`는 이미 따로 알린 참가자). 알린 뒤 돌아오면 `HostBack`을 보낸다.
+    fn tell_host_away(&mut self, except: &str) {
+        if !std::mem::replace(&mut self.host_away_told, true) {
+            broadcast(&self.members, except, ServerMsg::Notice { code: NoticeCode::HostAway });
+        }
+    }
+
+    /// 주최자 계정으로 들어온 사람이 `HOST_AWAY`보다 오래 없는지.
+    fn host_away(&self, now: Instant) -> bool {
+        self.host_left_at
+            .is_some_and(|t| now.saturating_duration_since(t) >= HOST_AWAY)
     }
 
     fn issue_resume(&mut self, peer: &str, name: &str) -> String {
@@ -170,9 +272,14 @@ impl Room {
         }
     }
 
+    fn take_waiting(&mut self, id: &str) -> Option<Member> {
+        let i = self.waiting.iter().position(|w| w.peer.id == id)?;
+        Some(self.waiting.remove(i))
+    }
+
     fn knocks(&self) -> Vec<Knock> {
         self.waiting
-            .values()
+            .iter()
             .map(|w| Knock {
                 id: w.peer.id.clone(),
                 name: w.peer.name.clone(),
@@ -218,7 +325,7 @@ impl Audience {
 pub struct Rooms {
     rooms: Mutex<HashMap<String, Room>>,
     ice: Ice,
-    /// 이번 달 번역 시간을 다 쓴 주최자(계정 id). 이들의 방은 음성 인식 토큰을 받지 못한다.
+    /// 이번 결제 기간의 번역 시간을 다 쓴 주최자(계정 id). 이들의 방은 음성 인식 토큰을 받지 못한다.
     out_of_time: Mutex<HashSet<String>>,
 }
 
@@ -261,7 +368,8 @@ impl Rooms {
         let mut rooms = self.rooms.lock().unwrap();
         if rooms
             .values()
-            .filter(|r| r.host_account == host_account)
+            // 손님이 링크를 열어 생긴 예약 회의 방은 주최자가 들어오기 전까지 세지 않는다.
+            .filter(|r| r.host_account == host_account && !(r.reserved && r.members.is_empty()))
             .count()
             >= MAX_ROOMS_PER_HOST
         {
@@ -283,7 +391,19 @@ impl Rooms {
             .lock()
             .unwrap()
             .entry(code.to_owned())
-            .or_insert_with(|| Room::new(host_account, settings));
+            .or_insert_with(|| Room::new(host_account, settings))
+            .reserved = true;
+    }
+
+    /// 회의를 지웠을 때: 방을 닫고 안에 있던 사람과 기다리던 게스트에게 알린다. 연결은 ws가 곧 닫는다.
+    pub fn close(&self, code: &str) {
+        let Some(room) = self.rooms.lock().unwrap().remove(code) else {
+            return;
+        };
+        let gone = ErrorCode::RoomNotFound;
+        for m in room.members.values().chain(&room.waiting) {
+            send(&m.tx, ServerMsg::Error { code: gone, message: format!("{gone:?}") });
+        }
     }
 
     pub fn exists(&self, code: &str) -> bool {
@@ -301,14 +421,17 @@ impl Rooms {
         }
     }
 
-    /// 번역 시간을 잰다(주기 작업). 번역이 켜져 있고 두 명 이상 입장해 있거나, 혼자라도 번역을 쓰는 동안 센다.
-    /// 1초 미만은 다음 측정으로 넘긴다.
+    /// 번역 시간을 잰다(주기 작업). 번역이 켜져 있고 누군가 말하는 동안 센다(`Room::accrue`).
+    /// 1초 미만은 다음 측정으로 넘긴다. 주최자가 `HOST_AWAY`보다 오래 없는 방에는 그때 한 번 알린다.
     pub fn meter(&self, now: Instant) -> Vec<Metered> {
         let blocked = self.out_of_time_hosts();
         let mut rooms = self.rooms.lock().unwrap();
         let mut out = Vec::new();
         for (code, room) in rooms.iter_mut() {
             room.accrue(now, blocked.contains(&room.host_account));
+            if room.settings.translation && room.host_away(now) {
+                room.tell_host_away("");
+            }
             room.peak = room.peak.max(room.members.len());
             let whole = room.unreported.floor();
             if whole >= 1.0 || room.peak > room.reported_peak {
@@ -327,6 +450,12 @@ impl Rooms {
 
     /// 시간을 다 쓴 주최자 목록을 바꾼다. 새로 막히거나 풀린 주최자의 방에는 모두에게 알린다.
     pub fn set_out_of_time(&self, hosts: HashSet<String>) {
+        self.set_out_of_time_at(hosts, Instant::now());
+    }
+
+    fn set_out_of_time_at(&self, hosts: HashSet<String>, now: Instant) {
+        // 잠금 순서는 다른 곳과 같게 방 → 시간 목록.
+        let mut rooms = self.rooms.lock().unwrap();
         let (blocked, restored): (Vec<String>, Vec<String>) = {
             let mut cur = self.out_of_time.lock().unwrap();
             let blocked = hosts.difference(&cur).cloned().collect();
@@ -337,11 +466,13 @@ impl Rooms {
         if blocked.is_empty() && restored.is_empty() {
             return;
         }
-        let rooms = self.rooms.lock().unwrap();
-        for room in rooms.values() {
+        for room in rooms.values_mut() {
+            // 바뀌기 전 상태로 지금까지를 먼저 잰다(막히기 전까지는 세고, 막혀 있던 동안은 세지 않게).
             let code = if blocked.contains(&room.host_account) {
+                room.accrue(now, false);
                 NoticeCode::QuotaExceeded
             } else if restored.contains(&room.host_account) {
+                room.accrue(now, true);
                 NoticeCode::QuotaRestored
             } else {
                 continue;
@@ -354,10 +485,35 @@ impl Rooms {
         self.out_of_time.lock().unwrap().clone()
     }
 
-    /// 이 방의 주최자가 번역 시간을 다 썼는지.
-    pub fn is_out_of_time(&self, code: &str) -> bool {
-        let host = self.rooms.lock().unwrap().get(code).map(|r| r.host_account.clone());
-        host.is_some_and(|h| self.out_of_time.lock().unwrap().contains(&h))
+    /// 열려 있는 방의 주최자들(아직 번역 시간을 재지 않은 방의 주최자도 시간이 남았는지 확인하려고).
+    pub fn open_hosts(&self) -> HashSet<String> {
+        self.rooms.lock().unwrap().values().map(|r| r.host_account.clone()).collect()
+    }
+
+    /// 잰 시간을 기록하지 못했을 때 되돌려 둔다(다음 측정에서 다시 보고하게).
+    pub fn restore_metered(&self, metered: &[Metered]) {
+        let mut rooms = self.rooms.lock().unwrap();
+        for m in metered {
+            if let Some(room) = rooms.get_mut(&m.code) {
+                room.unreported += m.seconds as f64;
+            }
+        }
+    }
+
+    /// 이 방에서 지금 음성 인식 토큰을 주지 않는 까닭: 주최자의 번역 시간이 떨어졌거나 주최자가 오래 없다.
+    /// 주최자가 없는 것을 여기서 처음 알았으면(주기 작업보다 먼저) 방 전원에게 알리고 알린 것으로 둔다
+    /// (돌아왔을 때 `HostBack`을 보내게).
+    pub fn stt_blocked(&self, code: &str, now: Instant) -> Option<NoticeCode> {
+        let mut rooms = self.rooms.lock().unwrap();
+        let room = rooms.get_mut(code)?;
+        if self.out_of_time.lock().unwrap().contains(&room.host_account) {
+            Some(NoticeCode::QuotaExceeded)
+        } else if room.host_away(now) {
+            room.tell_host_away("");
+            Some(NoticeCode::HostAway)
+        } else {
+            None
+        }
     }
 
     pub fn settings(&self, code: &str) -> Option<RoomSettings> {
@@ -378,6 +534,7 @@ impl Rooms {
         let mut rooms = self.rooms.lock().unwrap();
         let room = rooms.get_mut(code).ok_or(ErrorCode::RoomNotFound)?;
         let now = Instant::now();
+        let blocked = self.out_of_time.lock().unwrap().contains(&room.host_account);
         // 1회용: 맞든 틀리든 쓴 토큰은 지운다.
         let mut resumed = req
             .resume
@@ -387,8 +544,13 @@ impl Rooms {
         // 같은 참가자의 남은 음성 인식 토큰 한도를 이어 받는다(옛 연결이 아직 있으면 그쪽이 최신).
         let mut stt_tokens = resumed.as_mut().and_then(|r| r.stt_tokens.take());
         if let Some(r) = &resumed
-            && let Some(old) = room.members.remove(&r.peer)
+            && room.members.contains_key(&r.peer)
         {
+            room.accrue(now, blocked);
+            let old = room.members.remove(&r.peer).expect("checked above");
+            if old.peer.host && !room.members.values().any(|m| m.peer.host) {
+                room.host_left_at.get_or_insert(now);
+            }
             // 서버가 아직 끊긴 줄 모르는 옛 연결(반쯤 열린 TCP)을 밀어낸다.
             old.tx.close();
             stt_tokens = Some(old.stt_tokens);
@@ -410,10 +572,10 @@ impl Rooms {
             media: req.media,
             host: is_host,
         };
-        room.idle_since = None;
 
         // 주최자 계정이거나, 수락받은 적 있는 참가자가 재입장 토큰으로 돌아온 경우 바로 입장한다.
         if is_host || resumed.is_some() {
+            room.idle_since = None;
             let resume = room.issue_resume(&id, &peer.name);
             let welcome = ServerMsg::Welcome {
                 you: id.clone(),
@@ -425,12 +587,25 @@ impl Rooms {
                 resume,
             };
             send(&tx, welcome);
+            // 다시 연결한 화면도 지금 상태를 알게 입장 직후 알린다(그사이 바뀐 알림을 놓쳤을 수 있다).
+            if blocked {
+                send(&tx, ServerMsg::Notice { code: NoticeCode::QuotaExceeded });
+            } else if !is_host && room.settings.translation && room.host_away(now) {
+                send(&tx, ServerMsg::Notice { code: NoticeCode::HostAway });
+                room.tell_host_away(&id);
+            }
             broadcast(
                 &room.members,
                 &id,
                 ServerMsg::PeerJoined { peer: peer.clone() },
             );
-            room.accrue(now, self.out_of_time.lock().unwrap().contains(&room.host_account));
+            room.accrue(now, blocked);
+            if is_host {
+                room.host_left_at = None;
+                if std::mem::take(&mut room.host_away_told) {
+                    broadcast(&room.members, &id, ServerMsg::Notice { code: NoticeCode::HostBack });
+                }
+            }
             room.members.insert(
                 id.clone(),
                 Member {
@@ -440,6 +615,7 @@ impl Rooms {
                     stt_tokens: stt_tokens.unwrap_or_else(new_stt_tokens),
                 },
             );
+            room.peak = room.peak.max(room.members.len());
             room.caption_changes.send_modify(|v| *v += 1);
             return Ok(JoinOutcome::Joined(id));
         }
@@ -452,15 +628,12 @@ impl Rooms {
                 lang: peer.lang.clone(),
             },
         });
-        room.waiting.insert(
-            id.clone(),
-            Member {
-                caption_epoch: 0,
-                peer,
-                tx,
-                stt_tokens: new_stt_tokens(),
-            },
-        );
+        room.waiting.push(Member {
+            caption_epoch: 0,
+            peer,
+            tx,
+            stt_tokens: new_stt_tokens(),
+        });
         Ok(JoinOutcome::Waiting(id))
     }
 
@@ -473,14 +646,14 @@ impl Rooms {
         if !room.is_host_member(by) {
             return Err(ErrorCode::Forbidden);
         }
-        if !room.waiting.contains_key(guest) {
+        if !room.waiting.iter().any(|w| w.peer.id == guest) {
             return Err(ErrorCode::UnknownPeer);
         }
         // 가득 찬 상태에서 수락하면 게스트는 대기열에 그대로 남는다(자리가 나면 다시 수락 가능).
         if room.members.len() >= MAX_PEERS {
             return Err(ErrorCode::RoomFull);
         }
-        let member = room.waiting.remove(guest).expect("checked above");
+        let member = room.take_waiting(guest).expect("checked above");
         let resume = room.issue_resume(guest, &member.peer.name);
         let welcome = ServerMsg::Welcome {
             you: guest.to_owned(),
@@ -492,6 +665,10 @@ impl Rooms {
             resume,
         };
         send(&member.tx, welcome);
+        let blocked = self.out_of_time.lock().unwrap().contains(&room.host_account);
+        if blocked {
+            send(&member.tx, ServerMsg::Notice { code: NoticeCode::QuotaExceeded });
+        }
         broadcast(
             &room.members,
             guest,
@@ -499,8 +676,9 @@ impl Rooms {
                 peer: member.peer.clone(),
             },
         );
-        room.accrue(Instant::now(), self.out_of_time.lock().unwrap().contains(&room.host_account));
+        room.accrue(Instant::now(), blocked);
         room.members.insert(guest.to_owned(), member);
+        room.peak = room.peak.max(room.members.len());
         room.caption_changes.send_modify(|v| *v += 1);
         room.notify_hosts(ServerMsg::KnockResolved {
             id: guest.to_owned(),
@@ -514,7 +692,7 @@ impl Rooms {
         if !room.is_host_member(by) {
             return Err(ErrorCode::Forbidden);
         }
-        let member = room.waiting.remove(guest).ok_or(ErrorCode::UnknownPeer)?;
+        let member = room.take_waiting(guest).ok_or(ErrorCode::UnknownPeer)?;
         send(&member.tx, ServerMsg::Denied);
         room.notify_hosts(ServerMsg::KnockResolved {
             id: guest.to_owned(),
@@ -627,12 +805,24 @@ impl Rooms {
                 r.left_at.get_or_insert(now);
                 r.stt_tokens = Some(member.stt_tokens.clone());
             }
-        } else if room.waiting.remove(id).is_some() {
+        } else if room.take_waiting(id).is_some() {
             room.notify_hosts(ServerMsg::KnockResolved { id: id.to_owned() });
         }
-        if room.members.is_empty() && room.waiting.is_empty() {
-            room.idle_since = Some(Instant::now());
+        if room.host_left_at.is_none() && !room.members.values().any(|m| m.peer.host) {
+            room.host_left_at = Some(Instant::now());
         }
+        if room.members.is_empty() {
+            room.idle_since.get_or_insert_with(Instant::now);
+        }
+    }
+
+    /// 이 참가자가 지금 입장해 있는지(자막 파이프라인이 화자가 나갔는지 가리는 데 쓴다).
+    pub fn is_member(&self, code: &str, id: &str) -> bool {
+        self.rooms
+            .lock()
+            .unwrap()
+            .get(code)
+            .is_some_and(|r| r.members.contains_key(id))
     }
 
     pub fn caption_changes(&self, code: &str) -> Option<watch::Receiver<u64>> {
@@ -646,18 +836,26 @@ impl Rooms {
     /// 화자의 자막을 받을 사람들. 번역이 꺼진 방이거나 화자가 입장한 참가자가 아니면 None.
     /// 잠금은 복사하는 동안만 잡는다(보내는 쪽 채널은 복제 비용이 작다).
     pub fn caption_audience(&self, code: &str, speaker: &str) -> Option<Audience> {
+        self.audience(code, speaker, None)
+    }
+
+    /// 화자가 실제로 말한 글자를 받았을 때의 `caption_audience`. 이때부터 `SPEECH_ACTIVE` 동안 번역 시간으로 센다.
+    pub fn speech_audience(&self, code: &str, speaker: &str, now: Instant) -> Option<Audience> {
+        self.audience(code, speaker, Some(now))
+    }
+
+    fn audience(&self, code: &str, speaker: &str, spoke_at: Option<Instant>) -> Option<Audience> {
         let mut rooms = self.rooms.lock().unwrap();
         let room = rooms.get_mut(code)?;
-        // 주최자의 번역 시간이 떨어졌으면 자막을 만들지 않는다(이미 받은 음성 인식 세션이 남아 있어도).
-        if !room.settings.translation || self.out_of_time.lock().unwrap().contains(&room.host_account) {
+        // 주최자의 번역 시간이 떨어졌거나 주최자가 오래 없으면 자막을 만들지 않는다(이미 받은 음성 인식 세션이 남아 있어도).
+        if !room.settings.translation
+            || self.out_of_time.lock().unwrap().contains(&room.host_account)
+            || room.host_away(spoke_at.unwrap_or_else(Instant::now))
+        {
             return None;
         }
-        if !room.members.contains_key(speaker) {
-            return None;
-        }
-        room.used_at = Some(Instant::now());
         let me = room.members.get(speaker)?;
-        Some(Audience {
+        let audience = Audience {
             epoch: CaptionEpoch(room.caption_epoch, me.caption_epoch),
             src_lang: me.peer.lang.clone(),
             partner_lang: me.peer.partner_lang.clone(),
@@ -670,20 +868,33 @@ impl Rooms {
                     tx: m.tx.clone(),
                 })
                 .collect(),
-        })
+        };
+        if let Some(now) = spoke_at {
+            // 한동안 말이 없다가 다시 말하면 그 사이(쓰지 않은 시간)는 세지 않도록 먼저 잰다.
+            room.accrue(now, false);
+            room.used_at = Some(now);
+            if let Some(m) = room.members.get_mut(speaker) {
+                m.stt_tokens.spoke();
+            }
+        }
+        Some(audience)
     }
 
     /// 이 참가자가 음성 인식 토큰을 하나 더 받아도 되는지(받으면 한도를 하나 쓴다). 입장한 참가자만.
     pub fn take_stt_token(&self, code: &str, id: &str, now: Instant) -> bool {
         let mut rooms = self.rooms.lock().unwrap();
-        let Some(room) = rooms.get_mut(code) else {
-            return false;
-        };
-        let ok = room.members.get_mut(id).is_some_and(|m| m.stt_tokens.take(now));
-        if ok {
-            room.used_at = Some(now);
+        rooms
+            .get_mut(code)
+            .and_then(|room| room.members.get_mut(id))
+            .is_some_and(|m| m.stt_tokens.take(now))
+    }
+
+    /// 발급에 실패한 토큰의 한도를 돌려준다(Gemini 오류로 다시 요청하는 정직한 화면이 한도를 잃지 않게). 돌려주는 횟수는 묶는다.
+    pub fn give_back_stt_token(&self, code: &str, id: &str, now: Instant) {
+        let mut rooms = self.rooms.lock().unwrap();
+        if let Some(m) = rooms.get_mut(code).and_then(|room| room.members.get_mut(id)) {
+            m.stt_tokens.give_back(now);
         }
-        ok
     }
 
     /// 음성 인식 토큰에 잠글 언어: 내 언어, 그리고 다르면 상대 언어(상대 언어로 한 말도 그 언어 글자로 적게).
@@ -704,8 +915,14 @@ impl Rooms {
         let mut rooms = self.rooms.lock().unwrap();
         let mut ended = Vec::new();
         rooms.retain(|code, r| {
-            let keep = r.idle_since.is_none_or(|t| now.duration_since(t) < ROOM_IDLE_TTL);
+            let keep = (r.reserved && !r.waiting.is_empty())
+                || r.idle_since.is_none_or(|t| now.duration_since(t) < ROOM_IDLE_TTL);
             if !keep {
+                // 주최자를 기다리기만 하던 게스트에게 회의가 없어졌다고 알린다. 연결은 ws가 곧 닫는다.
+                let gone = ErrorCode::RoomNotFound;
+                for w in &r.waiting {
+                    send(&w.tx, ServerMsg::Error { code: gone, message: format!("{gone:?}") });
+                }
                 ended.push(code.clone());
             }
             keep
@@ -760,9 +977,15 @@ pub fn is_valid_room_code(code: &str) -> bool {
 
 /// 이름은 앞뒤 공백 제거 후 1~40자, 제어 문자 불가.
 pub fn normalize_name(name: &str) -> Option<String> {
-    let name = name.trim();
+    if name.chars().any(char::is_control) {
+        return None;
+    }
+    // 보이지 않는 방향·줄 제어 문자는 다른 참가자 화면의 이름을 속일 수 있어 지운다
+    // (오른쪽에서 왼쪽으로 쓰는 입력기나 붙여 넣은 글에 흔히 섞여 있으므로 거절하지 않는다).
+    let visible: String = name.chars().filter(|&c| !crate::account::invisible(c)).collect();
+    let name = visible.trim();
     let len = name.chars().count();
-    ((1..=40).contains(&len) && !name.chars().any(char::is_control)).then(|| name.to_owned())
+    (1..=40).contains(&len).then(|| name.to_owned())
 }
 
 /// BCP-47 형태만 확인한다(`ko`, `ja`, `en-US`, `zh-Hant`). 지원 여부는 번역 단계에서 판단.
@@ -819,20 +1042,100 @@ mod tests {
         }
     }
 
+    fn secs(n: u64) -> Duration {
+        Duration::from_secs(n)
+    }
+
+    fn billed(rooms: &Rooms, at: Instant) -> i64 {
+        rooms.meter(at).iter().map(|m| m.seconds).sum()
+    }
+
     #[test]
-    fn solo_room_is_metered_only_while_translation_is_used() {
+    fn one_person_is_metered_only_after_speaking_not_for_stt_tokens() {
         let rooms = Rooms::default();
         let code = rooms.create(HOST, ON).unwrap();
         let host = client();
         let id = joined(rooms.join(&code, req("Host"), Some(HOST), host.tx.clone()).unwrap());
         let t0 = Instant::now();
-        // 혼자 들어와 있기만 하면 세지 않는다.
-        let idle: i64 = rooms.meter(t0 + Duration::from_secs(60)).iter().map(|m| m.seconds).sum();
-        assert_eq!(idle, 0);
-        // 대면 대화처럼 혼자라도 음성 인식을 받아 쓰면 센다.
-        assert!(rooms.take_stt_token(&code, &id, t0 + Duration::from_secs(61)));
-        let used: i64 = rooms.meter(t0 + Duration::from_secs(120)).iter().map(|m| m.seconds).sum();
-        assert!(used >= 58, "solo use should be metered, got {used}");
+        // 들어와 있기만 하거나, 말하기 전에 음성 인식 세션을 미리 열어도(토큰) 세지 않는다.
+        assert!(rooms.take_stt_token(&code, &id, t0 + secs(1)));
+        assert_eq!(billed(&rooms, t0 + secs(60)), 0);
+        // 말하면(음성 인식 글자가 도착) 그때부터 SPEECH_ACTIVE까지만 센다. 쉬던 시간은 세지 않는다.
+        assert!(rooms.speech_audience(&code, &id, t0 + secs(61)).is_some());
+        assert_eq!(billed(&rooms, t0 + secs(120)), 59);
+        assert_eq!(billed(&rooms, t0 + secs(300)), 61 + SPEECH_ACTIVE.as_secs() as i64 - 120);
+        assert_eq!(billed(&rooms, t0 + secs(400)), 0);
+    }
+
+    #[test]
+    fn silent_rooms_are_not_billed_whatever_their_size() {
+        // 주최자 + 게스트가 말없이 켜 두기만 하면 세지 않고, 누가 말하면 그 뒤 SPEECH_ACTIVE까지만 센다.
+        let (rooms, code, _host_id, _host, guest_id, _guest, _) = room_with_admitted_guest();
+        let t0 = Instant::now();
+        assert_eq!(billed(&rooms, t0 + secs(600)), 0, "nobody speaks: not billed");
+        assert!(rooms.speech_audience(&code, &guest_id, t0 + secs(600)).is_some());
+        assert_eq!(billed(&rooms, t0 + secs(660)), 60);
+        assert_eq!(billed(&rooms, t0 + secs(900)), SPEECH_ACTIVE.as_secs() as i64 - 60);
+
+        // 대면 대화·자막 화면(주최자 연결 둘)도 같다.
+        let (rooms, code, _host_id, _host) = room_with_host();
+        let second = client();
+        let side = joined(rooms.join(&code, req("Host 2"), Some(HOST), second.tx.clone()).unwrap());
+        let t0 = Instant::now();
+        assert_eq!(billed(&rooms, t0 + secs(120)), 0);
+        assert!(rooms.speech_audience(&code, &side, t0 + secs(120)).is_some());
+        assert_eq!(billed(&rooms, t0 + secs(180)), 60);
+    }
+
+    #[test]
+    fn guests_cannot_spend_the_hosts_time_after_the_host_leaves() {
+        let (rooms, code, host_id, _host, guest_id, mut guest, _) = room_with_admitted_guest();
+        rooms.leave(&code, &host_id);
+        guest.drain();
+        let t0 = Instant::now();
+        let min = |m: u64| t0 + secs(m * 60);
+        // 주최자가 나간 뒤 HOST_AWAY까지는 그대로 쓴다.
+        assert!(rooms.speech_audience(&code, &guest_id, min(5)).is_some());
+        assert_eq!(billed(&rooms, min(6)), 60);
+        assert_eq!(rooms.stt_blocked(&code, min(9)), None);
+        assert!(rooms.speech_audience(&code, &guest_id, min(9) + secs(30)).is_some());
+        // 그 뒤로는 세지 않고(앞 발화의 남은 30초 + 나간 뒤 10분까지의 30초), 토큰·자막을 주지 않으며, 남은 사람에게 한 번 알린다.
+        assert!((59..=60).contains(&billed(&rooms, min(11))));
+        assert_eq!(billed(&rooms, min(12)), 0);
+        assert_eq!(rooms.stt_blocked(&code, min(11)), Some(NoticeCode::HostAway));
+        assert!(rooms.speech_audience(&code, &guest_id, min(11)).is_none());
+        let told = guest.drain();
+        assert_eq!(told.iter().filter(|m| matches!(m, ServerMsg::Notice { code: NoticeCode::HostAway })).count(), 1);
+        // 주최자가 돌아오면 다시 시작한다.
+        let back = client();
+        joined(rooms.join(&code, req("Host"), Some(HOST), back.tx.clone()).unwrap());
+        assert!(guest.drain().iter().any(|m| matches!(m, ServerMsg::Notice { code: NoticeCode::HostBack })));
+        assert_eq!(rooms.stt_blocked(&code, min(13)), None);
+        assert!(rooms.speech_audience(&code, &guest_id, min(13)).is_some());
+    }
+
+    #[test]
+    fn switching_out_of_time_bills_only_the_unblocked_part() {
+        let rooms = Rooms::default();
+        let code = rooms.create(HOST, ON).unwrap();
+        let host = client();
+        let id = joined(rooms.join(&code, req("Host"), Some(HOST), host.tx.clone()).unwrap());
+        let t0 = Instant::now();
+        assert!(rooms.speech_audience(&code, &id, t0).is_some());
+        // 10초 뒤 막히고 50초에 풀리면(추가 구매), 막혀 있던 40초는 세지 않는다.
+        rooms.set_out_of_time_at(HashSet::from([HOST.to_owned()]), t0 + secs(10));
+        rooms.set_out_of_time_at(HashSet::new(), t0 + secs(50));
+        assert_eq!(billed(&rooms, t0 + secs(60)), 20);
+    }
+
+    #[test]
+    fn stt_text_marks_use_only_for_members_of_translated_rooms() {
+        let (rooms, code, _host_id, _host) = room_with_host();
+        let g = client();
+        let gid = waiting(rooms.join(&code, req("G"), None, g.tx).unwrap());
+        let t0 = Instant::now();
+        assert!(rooms.speech_audience(&code, &gid, t0).is_none(), "waiting guest");
+        assert_eq!(billed(&rooms, t0 + secs(60)), 0);
     }
 
     #[test]
@@ -844,6 +1147,14 @@ mod tests {
         assert!(rooms.caption_audience(&code, &id).is_some());
         rooms.set_out_of_time(HashSet::from([HOST.to_owned()]));
         assert!(rooms.caption_audience(&code, &id).is_none());
+        assert_eq!(rooms.stt_blocked(&code, Instant::now()), Some(NoticeCode::QuotaExceeded));
+        // 다시 연결해 들어오면 입장 직후 지금 상태를 다시 받는다(놓친 알림 때문에 화면이 옛 상태에 머물지 않게).
+        let mut again = client();
+        joined(rooms.join(&code, req("Host"), Some(HOST), again.tx.clone()).unwrap());
+        assert!(matches!(
+            &again.drain()[..],
+            [ServerMsg::Welcome { .. }, ServerMsg::Notice { code: NoticeCode::QuotaExceeded }]
+        ));
     }
 
     fn waiting(outcome: JoinOutcome) -> PeerId {
@@ -1017,8 +1328,8 @@ mod tests {
         let id3 = joined(rooms.join(&code, resume_req("Guest", &token2), None, again.tx).unwrap());
         assert!(!rooms.take_stt_token(&code, &id3, now), "not refilled by evicting a half-open connection");
 
-        // 시간이 지나면 정상적으로 다시 찬다.
-        assert!(rooms.take_stt_token(&code, &id3, now + Duration::from_secs(31)));
+        // 시간이 지나면 정상적으로 다시 찬다(말이 없는 동안은 3분에 하나).
+        assert!(rooms.take_stt_token(&code, &id3, now + Duration::from_secs(181)));
         assert!(!rooms.take_stt_token(&code, "nobody", now), "only members get tokens");
     }
 
@@ -1199,6 +1510,64 @@ mod tests {
     }
 
     #[test]
+    fn knocks_are_listed_in_arrival_order() {
+        let rooms = Rooms::default();
+        let code = rooms.create(HOST, ON).unwrap();
+        let mut keep = Vec::new();
+        let mut ids = Vec::new();
+        for i in 0..MAX_WAITING {
+            let c = client();
+            ids.push(waiting(rooms.join(&code, req(&format!("G{i}")), None, c.tx.clone()).unwrap()));
+            keep.push(c);
+        }
+        rooms.leave(&code, &ids[3]);
+        ids.remove(3);
+
+        // 주최자가 (다시) 들어오면 먼저 온 사람부터 보인다.
+        let mut host = client();
+        joined(rooms.join(&code, req("Host"), Some(HOST), host.tx.clone()).unwrap());
+        match &host.drain()[..] {
+            [ServerMsg::Welcome { knocks, .. }] => {
+                assert_eq!(knocks.iter().map(|k| k.id.clone()).collect::<Vec<_>>(), ids);
+            }
+            other => panic!("expected welcome, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn waiting_guests_alone_do_not_keep_a_room_open() {
+        let later = || Instant::now() + ROOM_IDLE_TTL + secs(1);
+        // 주최자가 오지 않은 방
+        let rooms = Rooms::default();
+        let code = rooms.create(HOST, ON).unwrap();
+        let mut g = client();
+        waiting(rooms.join(&code, req("Early"), None, g.tx.clone()).unwrap());
+        g.drain();
+        assert_eq!(rooms.sweep(later()), std::slice::from_ref(&code));
+        assert!(!rooms.exists(&code));
+        assert!(matches!(
+            &g.drain()[..],
+            [ServerMsg::Error { code: ErrorCode::RoomNotFound, .. }]
+        ));
+
+        // 주최자가 나가고 게스트만 기다리는 방
+        let (rooms, code, host_id, _host) = room_with_host();
+        let g = client();
+        waiting(rooms.join(&code, req("Late"), None, g.tx).unwrap());
+        rooms.leave(&code, &host_id);
+        assert_eq!(rooms.sweep(later()), [code]);
+
+        // 예약 회의는 늦는 주최자를 기다리는 동안 남기고, 기다리던 사람이 떠나면 지운다.
+        let rooms = Rooms::default();
+        rooms.open_reserved(HOST, "abcd-efgh-ijkm", ON);
+        let g = client();
+        let id = waiting(rooms.join("abcd-efgh-ijkm", req("Early"), None, g.tx).unwrap());
+        assert!(rooms.sweep(later()).is_empty());
+        rooms.leave("abcd-efgh-ijkm", &id);
+        assert_eq!(rooms.sweep(later()), ["abcd-efgh-ijkm"]);
+    }
+
+    #[test]
     fn limits_room_size_queue_and_rooms_per_host() {
         let (rooms, code, host_id, _host) = room_with_host();
         let mut keep = Vec::new();
@@ -1235,10 +1604,31 @@ mod tests {
         );
 
         let rooms = Rooms::default();
+        // 손님이 미리 열어 본 예약 회의 방은 주최자의 방 수에 들지 않는다.
+        for i in 0..MAX_ROOMS_PER_HOST {
+            rooms.open_reserved(HOST, &format!("rsvd-{i:04}-aaaa"), ON);
+        }
         for _ in 0..MAX_ROOMS_PER_HOST {
             rooms.create(HOST, ON).unwrap();
         }
         assert_eq!(rooms.create(HOST, ON).unwrap_err(), ErrorCode::Forbidden);
+    }
+
+    #[test]
+    fn closing_a_deleted_meeting_tells_everyone_and_forgets_the_room() {
+        let (rooms, code, _host_id, mut host) = room_with_host();
+        let mut g = client();
+        waiting(rooms.join(&code, req("Early"), None, g.tx.clone()).unwrap());
+        host.drain();
+        g.drain();
+        rooms.close(&code);
+        assert!(!rooms.exists(&code));
+        for c in [&mut host, &mut g] {
+            assert!(matches!(
+                &c.drain()[..],
+                [ServerMsg::Error { code: ErrorCode::RoomNotFound, .. }]
+            ));
+        }
     }
 
     #[test]
@@ -1258,7 +1648,120 @@ mod tests {
         assert_eq!(normalize_name("  유승재 ").as_deref(), Some("유승재"));
         assert!(normalize_name("   ").is_none());
         assert!(normalize_name(&"가".repeat(41)).is_none());
+        assert_eq!(normalize_name("\u{200F}Mina\u{200B}").as_deref(), Some("Mina"));
+        assert!(normalize_name("\u{202E}\u{3164}").is_none());
         assert!(is_valid_lang("ko") && is_valid_lang("zh-Hant") && is_valid_lang("en-US"));
         assert!(!is_valid_lang("") && !is_valid_lang("k") && !is_valid_lang("ko_KR"));
+    }
+
+    #[test]
+    fn host_back_follows_host_away_however_it_was_told() {
+        // 주기 작업보다 먼저 토큰 요청에서 주최자가 없다고 알렸어도, 돌아오면 HostBack을 보낸다.
+        let (rooms, code, host_id, _host, _guest_id, mut guest, _) = room_with_admitted_guest();
+        rooms.leave(&code, &host_id);
+        guest.drain();
+        let t0 = Instant::now();
+        assert_eq!(rooms.stt_blocked(&code, t0 + HOST_AWAY + secs(1)), Some(NoticeCode::HostAway));
+        assert!(guest.drain().iter().any(|m| matches!(m, ServerMsg::Notice { code: NoticeCode::HostAway })));
+        let back = client();
+        joined(rooms.join(&code, req("Host"), Some(HOST), back.tx.clone()).unwrap());
+        assert!(guest.drain().iter().any(|m| matches!(m, ServerMsg::Notice { code: NoticeCode::HostBack })));
+    }
+
+    #[test]
+    fn tokens_without_speech_are_limited_to_the_silent_prewarm_rate() {
+        let (rooms, code, _host_id, _host, guest_id, _guest, _) = room_with_admitted_guest();
+        let t0 = Instant::now();
+        // 정직한 화면: 말이 없어도 세션을 미리 열어 두고 3분마다 바꾼다 → 한 시간 동안 모두 받는다(세지도 않는다).
+        let honest = (0..=20u64).filter(|i| rooms.take_stt_token(&code, &guest_id, t0 + secs(i * 181))).count();
+        assert_eq!(honest, 21);
+        assert_eq!(billed(&rooms, t0 + secs(3700)), 0);
+
+        // 고친 화면: 30초마다 토큰만 받고 글자는 보내지 않는다 → 처음 몫 + 3분에 하나만 받는다.
+        let (rooms, code, _host_id, _host, guest_id, _guest, _) = room_with_admitted_guest();
+        let greedy = (0..120u64).filter(|i| rooms.take_stt_token(&code, &guest_id, t0 + secs(i * 30))).count();
+        assert!(greedy <= TEXTLESS_TOKEN_BURST as usize + 20, "{greedy} tokens without speech in an hour");
+        // 말한 글자가 오면 일반 한도로 돌아간다(말하는 사람은 막히지 않는다).
+        assert!(rooms.speech_audience(&code, &guest_id, t0 + secs(3600)).is_some());
+        assert!(rooms.take_stt_token(&code, &guest_id, t0 + secs(3631)));
+    }
+
+    #[test]
+    fn an_honest_silent_listener_reconnects_at_once_after_a_few_blips() {
+        let (rooms, code, _host_id, _host, guest_id, _guest, _) = room_with_admitted_guest();
+        let t0 = Instant::now();
+        let at = |t: u64| t0 + secs(t);
+        assert!(rooms.take_stt_token(&code, &guest_id, at(0)));
+        // 연결이 세 번 끊겨 40초마다 다시 받고, 그 뒤 한 시간 동안 3분마다 바꾼다.
+        for t in [40, 80, 120] {
+            assert!(rooms.take_stt_token(&code, &guest_id, at(t)), "blip at {t}");
+        }
+        let mut t = 120;
+        for _ in 0..20 {
+            t += 181;
+            assert!(rooms.take_stt_token(&code, &guest_id, at(t)), "rotation at {t}");
+        }
+        // 지금 세션이 끊기면 처음 다시 요청(1초 뒤)에 바로 받는다.
+        assert!(rooms.take_stt_token(&code, &guest_id, at(t + 1)));
+    }
+
+    #[test]
+    fn refused_or_failed_token_requests_do_not_use_the_limit() {
+        let (rooms, code, _host_id, _host, guest_id, _guest, _) = room_with_admitted_guest();
+        let now = Instant::now();
+        for _ in 0..STT_TOKEN_BURST as usize {
+            assert!(rooms.take_stt_token(&code, &guest_id, now));
+        }
+        // 일반 한도에서 거절된 요청은 말 없는 한도를 쓰지 않는다: 일반 한도가 다시 차면 남은 말 없는 몫으로 받는다.
+        for _ in 0..10 {
+            assert!(!rooms.take_stt_token(&code, &guest_id, now));
+        }
+        let later = now + secs(60);
+        assert!(rooms.take_stt_token(&code, &guest_id, later));
+        assert!(rooms.take_stt_token(&code, &guest_id, later));
+        // 발급에 실패해 돌려준 토큰은 다시 쓸 수 있다. 다만 돌려받는 횟수는 묶여, 실패를 일으켜 가며 계속 받지는 못한다.
+        assert!(!rooms.take_stt_token(&code, &guest_id, later));
+        rooms.give_back_stt_token(&code, &guest_id, later);
+        assert!(rooms.take_stt_token(&code, &guest_id, later));
+        rooms.give_back_stt_token(&code, &guest_id, later);
+        assert!(rooms.take_stt_token(&code, &guest_id, later));
+        rooms.give_back_stt_token(&code, &guest_id, later);
+        assert!(!rooms.take_stt_token(&code, &guest_id, later), "only two refunds per ten minutes");
+
+        // 말 없는 한도에서 거절된 요청도 일반 한도를 쓰지 않는다: 말하면 바로 일반 한도만큼 받는다.
+        let (rooms, code, _host_id, _host, guest_id, _guest, _) = room_with_admitted_guest();
+        let t = now + secs(600);
+        let silent = (0..10).filter(|_| rooms.take_stt_token(&code, &guest_id, t)).count();
+        assert_eq!(silent, STT_TOKEN_BURST as usize);
+        let t = t + secs(120);
+        while rooms.take_stt_token(&code, &guest_id, t) {}
+        for _ in 0..5 {
+            assert!(!rooms.take_stt_token(&code, &guest_id, t));
+        }
+        assert!(rooms.speech_audience(&code, &guest_id, t).is_some());
+        assert!(rooms.take_stt_token(&code, &guest_id, t), "the general limit was not used up by refusals");
+    }
+
+    #[test]
+    fn honest_clients_recover_right_after_a_long_upstream_outage() {
+        // Gemini가 오래 실패해도(발급 실패는 세션을 열지 않는다) 끝나면 다음 재시도(최대 30초 간격)에 바로 받는다.
+        for outage in [300u64, 600, 900] {
+            let t0 = Instant::now();
+            let mut limits = new_stt_tokens();
+            let (mut t, mut failures) = (0u64, 0usize);
+            let recovered = loop {
+                let now = t0 + secs(t);
+                if limits.take(now) {
+                    if t >= outage {
+                        break t;
+                    }
+                    limits.give_back(now);
+                }
+                failures += 1;
+                t += [1u64, 3, 10, 30][failures.min(4) - 1];
+                assert!(t < 3000, "no token after a {outage} s outage");
+            };
+            assert!(recovered - outage <= 60, "{outage} s outage: first token {} s after it ended", recovered - outage);
+        }
     }
 }

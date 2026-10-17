@@ -1,5 +1,5 @@
 import type { Meeting } from './api'
-import { formatDate, formatTime } from './format'
+import { formatDate, formatTime, zoneName } from './format'
 import type { Locale, MessageKey } from './i18n'
 import { languageName } from './languages'
 
@@ -15,7 +15,8 @@ export function meetingUrl(m: Pick<Meeting, 'code'>): string {
 /** 다른 사람에게 보낼 초대 글(메일·메신저에 그대로 붙여 넣는다). */
 export function inviteText(m: Meeting, t: (key: MessageKey, p?: Record<string, string>) => string, locale: Locale): string {
   const start = m.startsAt ?? Math.floor(Date.now() / 1000)
-  const when = `${formatDate(start, locale, true)} ${formatTime(start, locale)} – ${formatTime(start + m.durationMin * 60, locale)}`
+  const zone = zoneName(start, locale)
+  const when = `${formatDate(start, locale, true)} ${formatTime(start, locale)} – ${formatTime(start + m.durationMin * 60, locale)}${zone ? ` (${zone})` : ''}`
   const langs = m.langA && m.langB ? `${languageName(m.langA)} ⇄ ${languageName(m.langB)}` : ''
   return t('invite.text', { title: m.title, when, url: meetingUrl(m), langs })
 }

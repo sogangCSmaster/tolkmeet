@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { fetchRoom } from '../lib/api'
 import { useAuth } from '../lib/auth'
 import { applyCaption, type Caption, type CaptionMsg } from '../lib/captions'
 import { LOCALES, translate, useI18n, type MessageKey } from '../lib/i18n'
@@ -11,6 +12,7 @@ import { downloadText, formatTranscript, Transcript, transcriptFileName } from '
 import { Icon } from './Icon'
 import { Notice } from './Meeting'
 import { LocaleSelect } from './LocaleSelect'
+import { QuotaModal } from './QuotaModal'
 import { Select } from './Select'
 import { StatusPage } from './StatusPage'
 
@@ -59,6 +61,9 @@ function Talk({ code }: { code: string }) {
   const [captions, setCaptions] = useState<Record<Side, Caption[]>>({ near: [], far: [] })
   const [stt, setStt] = useState<Record<Side, SttStatus | null>>({ near: null, far: null })
   const [failure, setFailure] = useState<MessageKey | null>(null)
+  // 번역 시간이 떨어지면 음성 인식이 멈춘다(TalkSide). 시간을 추가하면 서버 알림으로 다시 켜진다.
+  const [outOfTime, setOutOfTime] = useState(false)
+  const [quotaClosed, setQuotaClosed] = useState(false)
   // 실패하면 두 연결과 마이크를 모두 정리한다(실패 화면 뒤에서 계속 듣거나 회의에 남지 않게).
   const live = failure === null
   // 마이크 권한을 다시 요청할 때 올린다.
@@ -68,6 +73,8 @@ function Talk({ code }: { code: string }) {
   const [hasTranscript, setHasTranscript] = useState(false)
   const sidesRef = useRef<Record<Side, TalkSide | null>>({ near: null, far: null })
   const langsRef = useRef(langs)
+  /** 직접 언어를 고쳤는지(그 뒤에 온 예약 언어로 되돌리지 않게) */
+  const touchedRef = useRef(false)
 
   // 마이크만 쓴다(카메라 없음). 회의와 같은 처리(에코 제거·잡음 억제·자동 음량).
   useEffect(() => {
@@ -105,6 +112,10 @@ function Talk({ code }: { code: string }) {
           }
         },
         onSttStatus: (s) => setStt((m) => ({ ...m, [side]: s })),
+        onQuota: (out) => {
+          setOutOfTime(out)
+          if (!out) setQuotaClosed(false)
+        },
         onFailed: (reason) => setFailure(FAILURES[reason] ?? 'room.cannotJoin'),
       })
     const sides = { near: open('near', 'far'), far: open('far', 'near') }
@@ -133,7 +144,26 @@ function Talk({ code }: { code: string }) {
     return () => clearTimeout(id)
   }, [active, ids])
 
+  // 예약할 때 정한 언어 쌍(내 언어 → 아래쪽, 상대 언어 → 위쪽)으로 시작한다. 회의 정보는 마이크 준비와 함께(기다리지 않고) 받는다.
+  useEffect(() => {
+    let cancelled = false
+    fetchRoom(code)
+      .then((r) => {
+        if (cancelled || touchedRef.current || !r?.langA || !r.langB) return
+        const next = { near: r.langA, far: r.langB }
+        langsRef.current = next
+        setLangs(next)
+        sidesRef.current.near?.setLangs(next.near, next.far)
+        sidesRef.current.far?.setLangs(next.far, next.near)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [code])
+
   function changeLang(side: Side, lang: string) {
+    touchedRef.current = true
     const other: Side = side === 'near' ? 'far' : 'near'
     const next = { ...langs, [side]: lang }
     langsRef.current = next
@@ -194,6 +224,7 @@ function Talk({ code }: { code: string }) {
       ready={ready}
       micError={micError}
       sttStatus={stt[side]}
+      outOfTime={outOfTime}
       rotated={side === 'far' && rotated}
       onLang={(l) => changeLang(side, l)}
       onTalk={() => setActive((a) => (a === side ? null : side))}
@@ -231,6 +262,7 @@ function Talk({ code }: { code: string }) {
         </div>
       </div>
       {half('near')}
+      {outOfTime && !quotaClosed && <QuotaModal onClose={() => setQuotaClosed(true)} />}
     </div>
   )
 }
@@ -244,13 +276,14 @@ type HalfProps = {
   ready: boolean
   micError: boolean
   sttStatus: SttStatus | null
+  outOfTime: boolean
   rotated: boolean
   onLang: (lang: string) => void
   onTalk: () => void
 }
 
 /** 한 사람의 화면. 상대 말은 내 언어 번역을 크게, 내 말은 원문을 크게 보인다. */
-function TalkHalf({ side, lang, selfId, captions, speaking, ready, micError, sttStatus, rotated, onLang, onTalk }: HalfProps) {
+function TalkHalf({ side, lang, selfId, captions, speaking, ready, micError, sttStatus, outOfTime, rotated, onLang, onTalk }: HalfProps) {
   const { t: uiT } = useI18n()
   // 맞은편 사람은 화면 언어를 못 읽을 수 있다. 그 사람 언어로 된 문구가 있으면 그것으로 보인다.
   const own = LOCALES.find((l) => l.code === lang)?.code
@@ -266,10 +299,16 @@ function TalkHalf({ side, lang, selfId, captions, speaking, ready, micError, stt
     <section className={`talk-half ${side}${rotated ? ' rotated' : ''}`} lang={lang} aria-label={languageName(lang)}>
       <div className="talk-head">
         <Select ariaLabel={t('lang.mine')} value={lang} options={LANG_OPTIONS} onChange={onLang} variant="pill" icon="language" alwaysDown />
-        {(sttStatus === 'paused' || sttStatus === 'unavailable') && (
+        {outOfTime ? (
           <span className="talk-status" role="status">
-            {t(sttStatus === 'paused' ? 'captions.sttPaused' : 'captions.sttUnavailable')}
+            {t('quota.title')}
           </span>
+        ) : (
+          (sttStatus === 'paused' || sttStatus === 'unavailable') && (
+            <span className="talk-status" role="status">
+              {t(sttStatus === 'paused' ? 'captions.sttPaused' : 'captions.sttUnavailable')}
+            </span>
+          )
         )}
       </div>
       {/* 화면 낭독은 기기 주인 쪽만(같은 말이 원문·번역으로 두 번 읽히지 않게). */}
@@ -301,7 +340,7 @@ function TalkHalf({ side, lang, selfId, captions, speaking, ready, micError, stt
       <button
         className={`talk-button${speaking ? ' on' : ''}`}
         onClick={onTalk}
-        disabled={!ready}
+        disabled={!ready || outOfTime}
       >
         <Icon name="mic" />
         {speaking ? t('talk.listening') : t('talk.tapToSpeak')}

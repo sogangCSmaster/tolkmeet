@@ -32,7 +32,10 @@ use crate::room::{self, Audience, CaptionEpoch, Rooms};
 const HEDGE_AFTER: Duration = Duration::from_millis(1500);
 /// 확정 조각이 문장 끝 없이 끝난 뒤 이만큼 조용하면 문장을 확정한다.
 const FLUSH_AFTER: Duration = Duration::from_secs(2);
-/// STT 메시지 하나의 최대 길이(글자). 넘는 부분은 버린다.
+/// 화자가 나간 뒤에도 이미 말을 마친 문장의 번역은 이만큼 더 기다려 남은 사람에게 보낸다
+/// ("감사합니다, 다음에 봬요" 하고 바로 나가는 경우). 넘기면 원문으로 확정한다.
+const DRAIN_AFTER_LEAVE: Duration = Duration::from_secs(5);
+/// STT 메시지 하나의 최대 길이(글자). 넘는 부분은 버린다(거부하지 않는다: 거부하면 그 구간의 확정이 오지 않는다).
 pub const MAX_STT_CHARS: usize = 1000;
 /// 문장 끝 부호 없이 이만큼 길어지면 강제로 확정한다(번역 프롬프트가 끝없이 커지지 않게).
 const MAX_OPEN_CHARS: usize = 400;
@@ -56,17 +59,17 @@ impl Pipeline {
         Pipeline { rooms, translator }
     }
 
-    /// 화자 한 명의 워커를 띄운다. 핸들을 버리면 워커와 진행 중인 번역 요청이 모두 멈춘다.
+    /// 화자 한 명의 워커를 띄운다. 핸들을 버리면 말하던 중인 글자는 거두고, 이미 말을 마친 문장의 번역만
+    /// `DRAIN_AFTER_LEAVE`까지 마저 보낸 뒤 워커와 진행 중인 번역 요청이 멈춘다.
     pub fn speaker(self: &Arc<Self>, room: String, speaker: PeerId) -> SpeakerHandle {
         let (tx, rx) = mpsc::channel(INBOX_CAPACITY);
         let (done_tx, done_rx) = mpsc::channel(INBOX_CAPACITY);
         let changes = self.rooms.caption_changes(&room);
-        let epoch = self
-            .rooms
-            .caption_audience(&room, &speaker)
-            .map(|a| a.epoch);
+        // 처음 본 독자 목록도 남겨 둔다: 첫 글자와 함께 바로 나가도 그 독자에게 마저 보낼 수 있게.
+        let audience = self.rooms.caption_audience(&room, &speaker);
+        let epoch = audience.as_ref().map(|a| a.epoch);
         let worker = Worker {
-            last_audience: None,
+            last_audience: audience,
             epoch,
             pipeline: self.clone(),
             room: room.clone(),
@@ -81,6 +84,7 @@ impl Pipeline {
             done_tx,
             flush_at: None,
             last_notice: None,
+            departed: false,
         };
         tokio::spawn(worker.run(rx, done_rx, changes));
         SpeakerHandle {
@@ -101,12 +105,17 @@ pub struct SpeakerHandle {
 
 impl SpeakerHandle {
     pub fn push(&self, seg: u32, text: String, is_final: bool) {
+        let text = text::truncate_chars(text, MAX_STT_CHARS);
+        let rooms = &self.pipeline.rooms;
+        let at = Instant::now();
         // Capture consent/language at receipt, before the worker can be delayed.
-        let Some(audience) = self
-            .pipeline
-            .rooms
-            .caption_audience(&self.room, &self.speaker)
-        else {
+        // 글자가 있을 때만 실제로 말한 것으로 본다(빈 텍스트는 지우기·끝맺음). 한 사람만 있는 방의 번역 시간은 이것으로 잰다.
+        let audience = if text.trim().is_empty() {
+            rooms.caption_audience(&self.room, &self.speaker)
+        } else {
+            rooms.speech_audience(&self.room, &self.speaker, at)
+        };
+        let Some(audience) = audience else {
             return;
         };
         let stt = Stt {
@@ -114,7 +123,7 @@ impl SpeakerHandle {
             seg,
             text,
             is_final,
-            at: Instant::now(),
+            at,
         };
         // 워커가 밀리면 버린다. 중간 결과는 누적이라 다음 것이 앞의 것을 대신한다.
         if self.tx.try_send(stt).is_err() {
@@ -200,11 +209,14 @@ struct Worker {
     done_tx: mpsc::Sender<Done>,
     flush_at: Option<tokio::time::Instant>,
     last_notice: Option<Instant>,
+    /// 화자가 나갔다(연결이 끊겼거나 방에서 나감). 남은 확정 문장의 번역만 직전 독자에게 마저 보낸다.
+    departed: bool,
 }
 
 impl Drop for Worker {
     fn drop(&mut self) {
-        self.retract_pending();
+        // 연결이 끝났다(화자가 나갔거나 끊김): 확정된 문장은 원문으로 남기고 말하던 중인 글자만 지운다.
+        self.retract_pending(true);
     }
 }
 
@@ -232,32 +244,99 @@ impl Worker {
                 } => {
                     if changed.is_err() { break; }
                     self.sync_audience();
-                    for id in self.sentences.keys().copied().collect::<Vec<_>>() { self.refresh(id); }
+                    for id in self.sentences.keys().copied().collect::<Vec<_>>() { self.refresh(id, None); }
                 },
                 stt = rx.recv() => match stt {
                     Some(stt) => self.on_stt(stt),
-                    None => break,
+                    None => self.depart(),
                 },
                 Some(done) = done_rx.recv() => self.on_done(done),
                 () = flush => self.on_flush(),
+            }
+            if self.departed {
+                self.finish_departure(&mut rx);
+                self.drain(&mut done_rx, &mut changes).await;
+                break;
             }
             // Give socket writers a turn even when STT/progress queues stay ready.
             tokio::task::yield_now().await;
         }
     }
 
+    /// 화자가 나갔다. 정리는 지금 하던 처리가 끝난 뒤 `finish_departure`에서 한다.
+    fn depart(&mut self) {
+        self.departed = true;
+    }
+
+    /// 나간 화자의 남은 글자를 정리한다: 나가기 직전에 도착한 음성 인식 결과까지 반영하고,
+    /// 마침표 없이 끝난 확정 글자도 문장으로 확정해 번역을 마저 보낸다. 말하던 중인 글자만 거둔다.
+    fn finish_departure(&mut self, rx: &mut mpsc::Receiver<Stt>) {
+        while let Ok(stt) = rx.try_recv() {
+            self.on_stt(stt);
+        }
+        self.interim.clear();
+        let committed = std::mem::take(&mut self.committed);
+        if !committed.trim().is_empty() {
+            self.lock(committed, Instant::now());
+        }
+        self.open = None;
+        self.flush_at = None;
+        let open: Vec<u64> = self.sentences.iter().filter(|(_, s)| !s.locked).map(|(id, _)| *id).collect();
+        for id in open {
+            let mut s = self.sentences.remove(&id).expect("exists");
+            s.src.clear();
+            if let Some(audience) = &self.last_audience {
+                self.send_original(audience, id, &s);
+            }
+        }
+    }
+
+    /// 나간 화자의 확정 문장 번역을 `DRAIN_AFTER_LEAVE`까지 기다린다. 남은 것은 Drop이 원문으로 확정한다.
+    async fn drain(
+        &mut self,
+        done_rx: &mut mpsc::Receiver<Done>,
+        changes: &mut Option<watch::Receiver<u64>>,
+    ) {
+        let deadline = tokio::time::Instant::now() + DRAIN_AFTER_LEAVE;
+        while !self.sentences.is_empty() {
+            tokio::select! {
+                Some(done) = done_rx.recv() => self.on_done(done),
+                // 그사이 방이 없어졌으면(회의 삭제·정리) 더 보낼 곳이 없다. 다른 변화(Ok)는 넘기고 계속 기다린다.
+                changed = async {
+                    match changes.as_mut() {
+                        Some(rx) => rx.changed().await,
+                        None => std::future::pending().await,
+                    }
+                } => if changed.is_err() { break },
+                () = tokio::time::sleep_until(deadline) => break,
+            }
+        }
+    }
+
     fn sync_audience(&mut self) -> Option<Audience> {
+        if self.departed {
+            // 나간 뒤에는 방의 독자 목록을 다시 보지 않는다(화자가 없어 비어 있다). 나가기 직전 독자에게 보낸다.
+            return self.last_audience.clone();
+        }
         let audience = self
             .pipeline
             .rooms
             .caption_audience(&self.room, &self.speaker);
         let epoch = audience.as_ref().map(|a| a.epoch);
         if self.epoch != epoch {
+            // 화자가 나갔으면 확정된 문장은 남긴다(다른 사람에게서 갑자기 사라지지 않게).
+            // 번역을 끄거나 언어를 바꿨으면 기다리던 문장을 모두 거둔다.
+            let speaker_left =
+                audience.is_none() && !self.pipeline.rooms.is_member(&self.room, &self.speaker);
+            if speaker_left {
+                self.depart();
+                return self.last_audience.clone();
+            }
             self.committed.clear();
             self.interim.clear();
             self.open = None;
             self.flush_at = None;
-            self.retract_pending();
+            self.retract_pending(false);
             self.context.clear();
             self.epoch = epoch;
         }
@@ -281,8 +360,7 @@ impl Worker {
             self.committed = text::join(&self.committed, &interim);
             self.seg = stt.seg;
         }
-        let raw: String = stt.text.chars().take(MAX_STT_CHARS).collect();
-        let text = text::normalize(&raw);
+        let text = text::normalize(&stt.text);
         if stt.is_final {
             self.committed = text::join(&self.committed, &text);
             self.interim.clear();
@@ -339,7 +417,7 @@ impl Worker {
                 s.src = open_text;
                 s.version += 1;
                 s.stt_at = at;
-                self.refresh(id);
+                self.refresh(id, None);
             }
         }
 
@@ -369,11 +447,15 @@ impl Worker {
         id
     }
 
-    fn retract_pending(&mut self) {
+    /// 기다리던 문장을 모두 끝낸다. 말하던 중인 문장은 지우고(빈 원문), `keep_locked`면 확정된 문장은
+    /// 번역 없이 원문으로 확정한다.
+    fn retract_pending(&mut self, keep_locked: bool) {
         let pending = std::mem::take(&mut self.sentences);
         if let Some(audience) = &self.last_audience {
             for (id, mut sentence) in pending {
-                sentence.src.clear();
+                if !(keep_locked && sentence.locked) {
+                    sentence.src.clear();
+                }
                 self.send_original(audience, id, &sentence);
             }
         }
@@ -404,11 +486,13 @@ impl Worker {
     }
 
     fn finish_original(&self, id: u64, s: Sentence) {
-        if let Some(audience) = self
-            .pipeline
-            .rooms
-            .caption_audience(&self.room, &self.speaker)
-        {
+        // 나간 뒤에는 방의 독자 목록이 비어 있으므로 나가기 직전 독자에게 보낸다(`sync_audience`와 같게).
+        let audience = if self.departed {
+            self.last_audience.clone()
+        } else {
+            self.pipeline.rooms.caption_audience(&self.room, &self.speaker)
+        };
+        if let Some(audience) = audience {
             self.send_original(&audience, id, &s);
         }
     }
@@ -426,11 +510,12 @@ impl Worker {
             s.stt_at = at;
         }
         s.locked = true;
-        self.refresh(id);
+        self.refresh(id, None);
     }
 
-    /// 필요한 번역을 시작하고, 모든 참가자에게 이 문장의 현재 상태를 보낸다.
-    fn refresh(&mut self, id: u64) {
+    /// 필요한 번역을 시작하고, 참가자에게 이 문장의 현재 상태를 보낸다.
+    /// `only`: 이 목표 언어의 번역만 바뀌었다. 그 언어를 읽는 사람에게만 보낸다(번역 조각마다 모두에게 다시 보내지 않게).
+    fn refresh(&mut self, id: u64, only: Option<&str>) {
         let Some(audience) = self.sync_audience() else {
             return;
         };
@@ -456,6 +541,11 @@ impl Worker {
             let tgt = audience.target_for(&reader.lang);
             let tr = tgt.and_then(|l| s.tr.get(l));
             let is_final = s.locked && (tgt.is_none() || tr.is_some_and(|t| t.done));
+            // 다른 언어의 진행만 바뀌었으면 건너뛴다. 단, 이 독자의 확정 여부가 바뀌면(방금 언어를 바꿨는데
+            // 문장이 곧 지워지는 경우 등) 보낸다: 안 보내면 그 줄이 끝내 "번역 중"으로 남는다.
+            if only.is_some() && tgt != only && s.finalized_readers.contains(&reader.id) == is_final {
+                continue;
+            }
             if is_final {
                 s.finalized_readers.insert(reader.id.clone());
             } else {
@@ -593,7 +683,7 @@ impl Worker {
                 tr.text = Some(t.text);
                 tr.version = done.version;
             }
-            self.refresh(done.sentence);
+            self.refresh(done.sentence, Some(&done.lang));
             return;
         }
         tr.inflight = None;
@@ -631,7 +721,7 @@ impl Worker {
         if failed {
             self.notify_failure(&done.lang);
         }
-        self.refresh(done.sentence);
+        self.refresh(done.sentence, Some(&done.lang));
     }
 
     /// 번역 실패를 그 언어로 읽는 사람들에게 알린다. 장애 중 알림이 쏟아지지 않게 간격을 둔다.

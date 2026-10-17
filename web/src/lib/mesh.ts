@@ -14,6 +14,7 @@ type PeerLink = {
   polite: boolean
   makingOffer: boolean
   ignoreOffer: boolean
+  audioSender: RTCRtpSender | null
   videoSender: RTCRtpSender | null
   remote: MediaStream
   // 같은 상대의 시그널은 도착 순서대로 하나씩 처리해야 한다(sRD 완료 전 candidate 추가 방지).
@@ -56,13 +57,22 @@ export class Mesh {
       .catch((err) => console.error('signal handling failed', from, err))
   }
 
-  /** 카메라 ↔ 화면공유 전환. 미리 만든 비디오 송신자의 트랙만 교체한다. */
+  /** 카메라 ↔ 화면공유 전환(또는 다시 잡은 카메라). 미리 만든 비디오 송신자의 트랙만 교체한다. */
   async setVideoTrack(track: MediaStreamTrack | null) {
     this.videoTrack = track
+    await this.replaceAll((link) => link.videoSender, track)
+  }
+
+  /** 다시 잡은 마이크로 바꾼다. 이후 새로 맺는 연결은 `local`의 지금 오디오 트랙을 쓴다. */
+  async setAudioTrack(track: MediaStreamTrack | null) {
+    await this.replaceAll((link) => link.audioSender, track)
+  }
+
+  private async replaceAll(sender: (link: PeerLink) => RTCRtpSender | null, track: MediaStreamTrack | null) {
     const results = await Promise.allSettled(
       [...this.links.values()].map(async (link) => {
         try {
-          await link.videoSender?.replaceTrack(track)
+          await sender(link)?.replaceTrack(track)
         } catch (err) {
           // 전환 도중 퇴장한 참가자는 더 이상 트랙을 받을 대상이 아니다.
           if (link.pc.signalingState !== 'closed') throw err
@@ -117,6 +127,7 @@ export class Mesh {
       polite: this.selfId < peerId,
       makingOffer: false,
       ignoreOffer: false,
+      audioSender: null,
       videoSender: null,
       remote: new MediaStream(),
       queue: Promise.resolve(),
@@ -124,10 +135,10 @@ export class Mesh {
     this.links.set(peerId, link)
 
     // 장치나 권한이 없어도 수신용 미디어 구간을 만들어 먼저 협상할 수 있어야 한다.
-    pc.addTransceiver(this.local.getAudioTracks()[0] ?? 'audio', {
+    link.audioSender = pc.addTransceiver(this.local.getAudioTracks()[0] ?? 'audio', {
       direction: 'sendrecv',
       streams: [this.local],
-    })
+    }).sender
     link.videoSender = pc.addTransceiver(this.videoTrack ?? 'video', {
       direction: 'sendrecv',
       streams: [this.local],

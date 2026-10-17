@@ -334,6 +334,8 @@ svg { display: block; }
 .privacy :focus-visible { outline-color: #F5F5F7; }
 
 .foot-note { margin-top: 40px; padding-top: 28px; border-top: 1px solid var(--border); color: var(--text-secondary); font-size: 13px; line-height: 1.65; }
+.foot-biz { margin-top: 10px; color: var(--text-secondary); font-size: 12px; line-height: 1.65; }
+.foot-biz a { color: inherit; }
 
 /* ── 좁은 화면 ── */
 @media (max-width: 1080px) {

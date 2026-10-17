@@ -68,6 +68,7 @@ body:has(> .legal) { background: var(--legal-bg); }
 .legal-foot { padding: 28px 24px; background: var(--legal-card); color: var(--text-secondary); font-size: 12px; text-align: center; }
 .legal-foot a { color: var(--text-secondary); }
 .legal-foot a:hover { color: var(--text); }
+.legal-biz { margin: 0 0 6px; line-height: 1.65; }
 
 @media (max-width: 640px) {
   .legal-top { gap: 16px; padding: 0 16px; }

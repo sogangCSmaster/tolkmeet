@@ -7,6 +7,7 @@ import type { ServerMsg } from '../protocol/ServerMsg'
 import type { SignalData as WireSignal } from '../protocol/SignalData'
 import { applyCaption, type Caption } from '../lib/captions'
 import { useI18n, type Locale, type MessageKey } from '../lib/i18n'
+import { reacquireTrack } from '../lib/media'
 import { Mesh } from '../lib/mesh'
 import type { Prefs } from '../lib/prefs'
 import { Signaling } from '../lib/signaling'
@@ -59,6 +60,8 @@ type Status =
 const canShare = typeof navigator !== 'undefined' && typeof navigator.mediaDevices?.getDisplayMedia === 'function'
 
 const RECONNECT_TIMEOUT_MS = 5000
+/** 끝난 장치를 다시 켜려다 실패한 뒤, 장치가 다시 연결되면 저절로 다시 잡아 보는 기간 */
+const WANT_MS = 30_000
 /** 처음 입장할 때는 재시도 없이 오류를 보이므로, 느린 모바일 망의 TLS 연결까지 기다리도록 넉넉히 둔다. */
 const FIRST_CONNECT_TIMEOUT_MS = 10_000
 
@@ -97,6 +100,8 @@ export function Room({ code, local, prefs, media, onPrefsChange, onMediaChange, 
   const [sttStatus, setSttStatus] = useState<SttStatus | null>(null)
   const [outOfTime, setOutOfTime] = useState(false)
   const [quotaClosed, setQuotaClosed] = useState(false)
+  // 주최자가 오래 자리를 비워 서버가 음성 인식·번역을 멈췄다(주최자의 시간을 쓰지 않게). 돌아오면 서버가 알린다.
+  const [hostAway, setHostAway] = useState(false)
   // 화면 공유 중 자막 창(Document PiP). 공유를 시작한 클릭 안에서 바로 열어 보고, 막히면 버튼으로 연다.
   const pip = usePipWindow(`Tolkmeet · ${t('history.title')}`)
   const pipOpenRef = useRef(pip.open)
@@ -170,9 +175,11 @@ export function Room({ code, local, prefs, media, onPrefsChange, onMediaChange, 
             (id, stream) => setStreams((s) => ({ ...s, [id]: stream })),
           )
           meshRef.current = mesh
+          const camera = local.getVideoTracks()[0] ?? null
           screenRef.current = new ScreenShare(
-            mesh,
-            local.getVideoTracks()[0] ?? null,
+            // 공유가 끝나면 카메라로 돌아간다. 그사이 카메라를 다시 잡았으면(장치를 다시 연결) 지금 카메라로.
+            { setVideoTrack: (track) => mesh.setVideoTrack(track === camera ? (local.getVideoTracks()[0] ?? null) : track) },
+            camera,
             (track) => {
               setScreenTrack(track)
               sharingRef.current = !!track
@@ -188,7 +195,7 @@ export function Room({ code, local, prefs, media, onPrefsChange, onMediaChange, 
               const next = { ...mediaRef.current, screen: !!track }
               mediaRef.current = next
               onMediaChangeRef.current(next)
-              sig.send({ t: 'media', media: next })
+              sig.send({ t: 'media', media: announced(local, next) })
             },
             setScreenBusy,
             () => setToast({ key: 'room.screenFailed' }),
@@ -200,6 +207,9 @@ export function Room({ code, local, prefs, media, onPrefsChange, onMediaChange, 
           selfIdsRef.current.add(msg.you)
           retriesRef.current = 0
           setDisconnected(false)
+          // 끊긴 사이 놓친 알림이 있을 수 있어 새로 시작한다. 아직 막혀 있으면 서버가 입장 직후 다시 알린다.
+          setOutOfTime(false)
+          setHostAway(false)
           setStatus({ kind: 'joined', selfId: msg.you })
           setIsHost(msg.host)
           setSettings(msg.settings)
@@ -265,6 +275,11 @@ export function Room({ code, local, prefs, media, onPrefsChange, onMediaChange, 
             setQuotaClosed(false)
             setToast({ key: 'quota.restored' })
           }
+          else if (msg.code === 'host_away') setHostAway(true)
+          else if (msg.code === 'host_back') {
+            setHostAway(false)
+            setToast({ key: 'quota.restored' })
+          }
           break
         case 'error': {
           const fatal = FATAL_ERRORS[msg.code]
@@ -274,6 +289,12 @@ export function Room({ code, local, prefs, media, onPrefsChange, onMediaChange, 
             setStatus({ kind: 'error', message: fatal ?? 'room.cannotJoin' })
           }
           else if (msg.code === 'room_full') setToast({ key: 'room.full' })
+          else if (msg.code === 'room_not_found') {
+            // 회의가 지워졌다(주최자가 삭제). 다시 연결하지 않고 바로 알린다.
+            stoppedRef.current = true
+            resumeRef.current = null
+            setStatus({ kind: 'error', message: 'room.notFound' })
+          }
           else console.warn('server error', msg.code, msg.message)
           break
         }
@@ -332,7 +353,7 @@ export function Room({ code, local, prefs, media, onPrefsChange, onMediaChange, 
       name: nameRef.current,
       lang: p.lang,
       partner_lang: p.partnerLang,
-      media: mediaRef.current,
+      media: announced(local, mediaRef.current),
       ...(resumeRef.current ? { resume: resumeRef.current } : {}),
     })
     // 토큰은 welcome에서 새것으로 바뀔 때까지 지니고 있는다(이 연결이 열리지 못하면 다음 시도에 다시 쓴다).
@@ -381,10 +402,97 @@ export function Room({ code, local, prefs, media, onPrefsChange, onMediaChange, 
   }, [toast])
 
   const joined = status.kind === 'joined'
+  // 입장한 뒤에만 미디어 상태를 보낸다(다시 연결하는 동안 바뀐 상태는 다음 join이 싣는다). 나중에 불리는 콜백이 본다.
+  const canAnnounceRef = useRef(false)
+  useEffect(() => {
+    canAnnounceRef.current = joined
+  }, [joined])
+  const setMediaAndAnnounce = useCallback(
+    (next: MediaState) => {
+      mediaRef.current = next
+      onMediaChangeRef.current(next)
+      if (canAnnounceRef.current) sigRef.current?.send({ t: 'media', media: announced(local, next) })
+    },
+    [local],
+  )
+
+  // 마이크·카메라를 다시 잡으면 올린다(트랙이 바뀌어 음성 인식·내 화면이 새 트랙을 쓰게).
+  const [trackGen, setTrackGen] = useState(0)
+  // 끝난 장치를 다시 켜 달라고 했는데 아직 못 잡았다. 그 뒤 잠깐(WANT_MS) 안에 장치가 바뀌면(다시 꽂음) 다시 시도한다.
+  // 기한을 두는 건 한참 뒤 상관없는 장치(이어폰 등)가 연결될 때 마이크가 저절로 켜지지 않게 하려는 것.
+  const wantRef = useRef({ mic: 0, cam: 0 })
+  const reacquiringRef = useRef({ mic: false, cam: false })
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
+  // 장치가 빠지거나 권한이 회수되면 트랙이 끝난다. 끈 것으로 알리고 안내한다(켜진 채 빈 타일로 남지 않게).
+  useEffect(() => {
+    const tracks = local.getTracks()
+    const onEnded = (e: Event) => {
+      const kind = (e.target as MediaStreamTrack).kind === 'audio' ? 'mic' : 'cam'
+      setMediaAndAnnounce({ ...mediaRef.current, [kind]: false })
+      setToast({ key: kind === 'mic' ? 'room.micEnded' : 'room.camEnded', ms: 6000 })
+    }
+    tracks.forEach((t) => t.addEventListener('ended', onEnded))
+    return () => tracks.forEach((t) => t.removeEventListener('ended', onEnded))
+  }, [local, trackGen, setMediaAndAnnounce])
+
+  const reacquire = useCallback(
+    async (kind: 'mic' | 'cam') => {
+      if (reacquiringRef.current[kind]) return
+      reacquiringRef.current[kind] = true
+      try {
+        const fresh = await reacquireTrack(kind === 'mic' ? 'audio' : 'video')
+        // 그사이 회의를 나갔으면 장치를 바로 놓는다.
+        if (!mountedRef.current) return fresh.stop()
+        wantRef.current[kind] = 0
+        for (const old of kind === 'mic' ? local.getAudioTracks() : local.getVideoTracks()) {
+          local.removeTrack(old)
+          old.stop()
+        }
+        local.addTrack(fresh)
+        const mesh = meshRef.current
+        const replaced =
+          kind === 'mic'
+            ? mesh?.setAudioTrack(fresh)
+            : // 화면 공유 중이면 공유가 끝날 때 이 카메라로 돌아간다(ScreenShare에 넘긴 함수).
+              sharingRef.current
+              ? undefined
+              : mesh?.setVideoTrack(fresh)
+        replaced?.catch((err) => console.error('device replacement failed', kind, err))
+        setTrackGen((g) => g + 1)
+        setMediaAndAnnounce({ ...mediaRef.current, [kind]: true })
+      } catch (err) {
+        console.warn('device unavailable', kind, err)
+        if (mountedRef.current) setToast({ key: 'room.deviceRetry', ms: 6000 })
+      } finally {
+        reacquiringRef.current[kind] = false
+      }
+    },
+    [local, setMediaAndAnnounce],
+  )
+
+  useEffect(() => {
+    const devices = navigator.mediaDevices
+    if (!devices?.addEventListener) return
+    const onChange = () => {
+      for (const kind of ['mic', 'cam'] as const) {
+        if (wantRef.current[kind] > Date.now() && !hasLiveTrack(local, kind)) void reacquire(kind)
+      }
+    }
+    devices.addEventListener('devicechange', onChange)
+    return () => devices.removeEventListener('devicechange', onChange)
+  }, [local, reacquire])
+
   const micTrack = local.getAudioTracks()[0] ?? null
   // 내 말은 내 브라우저가 직접 인식한다. 번역이 켜진 방에 입장해 있는 동안만.
-  // 주최자의 번역 시간이 떨어지면 음성 인식을 멈추고, 다시 생기면(서버 알림) 효과가 다시 켠다.
-  const sttEnabled = joined && !disconnected && settings.translation && !!micTrack && !outOfTime
+  // 주최자의 번역 시간이 떨어지거나 주최자가 오래 없으면 음성 인식을 멈추고, 풀리면(서버 알림) 효과가 다시 켠다.
+  const sttEnabled = joined && !disconnected && settings.translation && !!micTrack && !outOfTime && !hostAway
 
   useEffect(() => {
     const sig = sigRef.current
@@ -442,12 +550,21 @@ export function Room({ code, local, prefs, media, onPrefsChange, onMediaChange, 
     if (!screenTrack) pipClose()
   }, [screenTrack, pipClose])
   const showPanel = joined && panelOpen && (settings.translation || isHost)
-  const selfStream = useMemo(() => (screenTrack ? new MediaStream([screenTrack]) : local), [screenTrack, local])
+  // 장치를 다시 잡은 뒤에는 새 스트림 객체로 넘긴다(내 화면이 바뀐 트랙을 다시 붙이게).
+  const selfStream = useMemo(
+    () => (screenTrack ? new MediaStream([screenTrack]) : trackGen ? new MediaStream(local.getTracks()) : local),
+    [screenTrack, local, trackGen],
+  )
 
   function changeMedia(next: MediaState) {
-    mediaRef.current = next
-    onMediaChange(next)
-    if (joined) sigRef.current?.send({ t: 'media', media: next })
+    // 끝난 장치를 다시 켜면 새로 잡아 본다(잡으면 켜진다).
+    const revive = (['mic', 'cam'] as const).find((k) => next[k] && !media[k] && !hasLiveTrack(local, k))
+    if (revive) {
+      wantRef.current[revive] = Date.now() + WANT_MS
+      void reacquire(revive)
+      return
+    }
+    setMediaAndAnnounce(next)
   }
 
   function changePrefs(next: Prefs) {
@@ -730,17 +847,25 @@ export function Room({ code, local, prefs, media, onPrefsChange, onMediaChange, 
         />
       )}
       {outOfTime && isHost && !quotaClosed && <QuotaModal onClose={() => setQuotaClosed(true)} />}
-      {outOfTime && !isHost && (
-        <div className="toast" role="status">
-          {t('quota.guest')}
-        </div>
-      )}
       {isHost && <KnockPrompts knocks={knocks} onAdmit={admit} onDeny={deny} />}
-      {toast && (
-        <div className="toast" role="status">
-          {t(toast.key, toast.params)}
-        </div>
-      )}
+      {/* 계속 뜨는 안내가 아래, 잠깐 뜨는 안내가 그 위에 쌓인다(겹치지 않게). */}
+      <div className="toasts">
+        {outOfTime && !isHost && (
+          <div className="toast" role="status">
+            {t('quota.guest')}
+          </div>
+        )}
+        {hostAway && !outOfTime && (
+          <div className="toast" role="status">
+            {t('room.hostAway')}
+          </div>
+        )}
+        {toast && (
+          <div className="toast" role="status">
+            {t(toast.key, toast.params)}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -752,6 +877,15 @@ function Clock({ locale }: { locale: Locale }) {
     return () => clearInterval(id)
   }, [])
   return <span>{now.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit', hour12: false })}</span>
+}
+
+function hasLiveTrack(local: MediaStream, kind: 'mic' | 'cam'): boolean {
+  return (kind === 'mic' ? local.getAudioTracks() : local.getVideoTracks()).some((t) => t.readyState === 'live')
+}
+
+/** 다른 참가자에게 알릴 상태: 실제로 쓸 수 있는 장치만 켜진 것으로 본다(카메라가 없거나 트랙이 끝났으면 꺼짐). */
+function announced(local: MediaStream, media: MediaState): MediaState {
+  return { ...media, mic: media.mic && hasLiveTrack(local, 'mic'), cam: media.cam && hasLiveTrack(local, 'cam') }
 }
 
 function without<T>(record: Record<string, T>, key: string): Record<string, T> {

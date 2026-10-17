@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
-import { api, createRoom, type Plan, type User } from '../lib/api'
-import { features, refreshAuth, setUser, useAuth } from '../lib/auth'
+import { api, createRoom, openPortal, type Billing, type Plan, type User } from '../lib/api'
+import { features, refreshAuth, setUser } from '../lib/auth'
 import { useI18n, type MessageKey } from '../lib/i18n'
 import '../lib/i18nPages'
 import { legalUrl } from '../lib/links'
-import { navigate, queryParam } from '../lib/router'
+import { navigate, queryParam, useHostOnly } from '../lib/router'
 import { BrandMark } from './BrandMark'
 import { Header } from './Header'
 import { Icon } from './Icon'
@@ -15,6 +15,8 @@ type Item = 'basic' | 'pro' | 'hours'
 type CheckoutData = {
   clientToken: string
   sandbox: boolean
+  /** 서버가 만든 Paddle 거래(금액·사용자 서명이 들어 있다). 옛 서버는 주지 않는다. */
+  transactionId?: string
   priceId: string
   quantity: number
   email: string
@@ -58,10 +60,47 @@ function isDark(): boolean {
 
 const PRICE: Record<Exclude<Item, 'hours'>, string> = { basic: '$19', pro: '$39' }
 const HOURS = [1, 5, 10]
+/** 서버가 한 번에 받는 시간 추가 수량(meetings.rs checkout) */
+const MAX_HOURS = 100
+
+/**
+ * 시간을 사기 전의 추가 시간 잔액. 결제 완료 화면이 웹훅으로 늘어난 것을 확인할 때 비교한다.
+ * 저장소가 막힌 브라우저(사생활 보호 모드 등)에서는 쓰지 못하므로, 그때는 잔액이 0보다 큰지로 판단한다.
+ */
+const HOURS_BEFORE = 'tolkmeet.hoursBefore'
+/** 이보다 오래된 기록은 이번 결제의 것이 아니다. */
+const HOURS_BEFORE_TTL = 60 * 60_000
+
+function saveHoursBefore(extraSec: number) {
+  try {
+    sessionStorage.setItem(HOURS_BEFORE, JSON.stringify({ extraSec, at: Date.now() }))
+  } catch {
+    // 저장하지 못하면 완료 화면이 잔액 > 0으로 판단한다.
+  }
+}
+
+function readHoursBefore(): number | null {
+  try {
+    const v = JSON.parse(sessionStorage.getItem(HOURS_BEFORE) ?? 'null') as { extraSec?: unknown; at?: unknown } | null
+    if (v && typeof v.extraSec === 'number' && typeof v.at === 'number' && Date.now() - v.at < HOURS_BEFORE_TTL) return v.extraSec
+  } catch {
+    // 읽지 못하면 기록이 없는 것으로 본다.
+  }
+  return null
+}
+
+function clearHoursBefore() {
+  try {
+    sessionStorage.removeItem(HOURS_BEFORE)
+  } catch {
+    // 지우지 못해도 한 시간이 지나면 쓰지 않는다.
+  }
+}
 
 export function Checkout() {
   const { t, locale } = useI18n()
-  const auth = useAuth()
+  // 로그인 전이면 가입부터(가입 뒤 이 화면으로 돌아온다). 여기서 로그아웃했으면 홈으로.
+  const auth = useHostOnly('/signup')
   const [item, setItem] = useState<Item>(() => {
     const q = queryParam('item') ?? queryParam('plan')
     return q === 'pro' || q === 'hours' ? q : 'basic'
@@ -78,14 +117,11 @@ export function Checkout() {
   const [needReconsent, setNeedReconsent] = useState(false)
   const [error, setError] = useState<MessageKey | null>(null)
 
-  useEffect(() => {
-    if (auth.status === 'guest') navigate(`/signup`)
-  }, [auth.status])
   if (auth.status !== 'host') return <div className="shell" />
   const user = auth.user
   // 요금제가 없으면 시간 추가는 살 수 없다(구독부터).
   const sel: Item = item === 'hours' && user.plan === 'none' ? 'basic' : item
-  // 이미 구독 중이면 다른 요금제는 "바꾸기"(남은 기간만큼 정산)로 처리한다.
+  // 이미 구독 중이면 다른 요금제는 "바꾸기"로 처리한다(올리면 남은 기간의 차액만 바로 청구, 내리면 청구·환불 없이 다음 결제부터 낮은 요금).
   const changing = sel !== 'hours' && user.plan !== 'none' && user.plan !== sel
   const same = sel !== 'hours' && user.plan === sel
 
@@ -101,21 +137,41 @@ export function Checkout() {
           setNeedReconsent(true)
           return setError('checkout.consentWithdrawn')
         }
+        // 지난 결제가 실패한 구독은 Paddle이 바꾸지 않는다. 결제 수단부터 고치게 안내한다.
+        if (r.code === 'past_due') return setError('checkout.pastDue')
         return setError('account.billingFailed')
       }
-      return navigate(`/billing/done?item=${sel}`)
+      return navigate(`/billing/done?item=${sel}&change=1`)
     }
-    const r = await api.post<CheckoutData | { dev: true }>('/api/billing/checkout', {
-      item: sel,
-      quantity: sel === 'hours' ? qty : 1,
-      consentProvide: consentProvide,
-      consentTransfer: consentTransfer,
-    })
+    // 시간을 살 때는 지금 잔액을 함께 받아 둔다(완료 화면이 늘어난 것을 확인한다). 결제 요청과 병렬이라 기다림이 늘지 않는다.
+    const [r, before] = await Promise.all([
+      api.post<CheckoutData | { dev: true }>('/api/billing/checkout', {
+        item: sel,
+        quantity: sel === 'hours' ? qty : 1,
+        consentProvide: consentProvide,
+        consentTransfer: consentTransfer,
+      }),
+      sel === 'hours' ? api.get<Billing>('/api/billing') : null,
+    ])
     if (!r.ok) {
       setBusy(false)
+      // 앞선 구독 결제가 아직 확인 중이다(웹훅 전). 두 번 결제되지 않게 서버가 막는다.
+      if (r.code === 'pending') return setError('checkout.pending')
+      // 요금제가 없는데 시간을 사려 했다(그사이 요금제가 끝난 경우 등). 계정 정보를 다시 받아 요금제 고르기로 돌린다.
+      if (r.code === 'plan') {
+        void refreshAuth()
+        return setError('checkout.planNeeded')
+      }
+      // 이미 구독 중이다(다른 탭·기기에서 결제해 이 화면의 계정 정보가 오래됐다). 결제되지 않았다.
+      // 계정 정보를 다시 받으면 이 화면이 요금제 바꾸기(같은 요금제면 "이미 이 요금제") 화면으로 바뀐다.
+      if (r.code === 'subscribed') {
+        await refreshAuth()
+        return setError('checkout.subscribed')
+      }
       // 버튼이 동의 전에는 꺼져 있으므로 보통은 오지 않는다. 서버가 동의 없음으로 거절하면 그대로 알린다.
       return setError(r.code === 'consent' ? 'checkout.consentNeeded' : 'account.billingFailed')
     }
+    if (before?.ok) saveHoursBefore(before.data.extraSec)
     if ('dev' in r.data) {
       // 개발 모드: 결제 없이 켠다.
       const d = await api.post('/api/billing/dev', { item: sel, quantity: qty })
@@ -131,17 +187,20 @@ export function Checkout() {
         paddle.Initialize({ token: data.clientToken })
         paddleReady = true
       }
-      paddle.Checkout.open({
-        items: [{ priceId: data.priceId, quantity: data.quantity }],
-        customer: { email: data.email },
-        customData: data.customData,
-        settings: {
-          displayMode: 'overlay',
-          theme: isDark() ? 'dark' : 'light',
-          locale: document.documentElement.lang || 'en',
-          successUrl: `${location.origin}/billing/done?item=${sel}${sel === 'hours' ? `&q=${qty}` : ''}`,
-        },
-      })
+      const settings = {
+        displayMode: 'overlay',
+        theme: isDark() ? 'dark' : 'light',
+        locale: document.documentElement.lang || 'en',
+        successUrl: `${location.origin}/billing/done?item=${sel}${sel === 'hours' ? `&q=${qty}` : ''}`,
+      }
+      const customer = data.email ? { customer: { email: data.email } } : {}
+      paddle.Checkout.open(
+        data.transactionId
+          ? // 서버가 만든 거래로 연다(항목·사용자 서명은 거래에 있다). Paddle.js는 이때 items를 받지 않는다.
+            { transactionId: data.transactionId, ...customer, settings }
+          : // 거래 id를 주지 않는 옛 서버
+            { items: [{ priceId: data.priceId, quantity: data.quantity }], ...customer, customData: data.customData, settings },
+      )
     } catch {
       setError('checkout.loadFailed')
     }
@@ -154,10 +213,14 @@ export function Checkout() {
       <Header />
       <main className="checkout">
         <section className="checkout-main" aria-labelledby="checkout-title">
-          <h1 id="checkout-title">{t(sel === 'hours' ? 'checkout.hoursTitle' : sel === 'pro' ? 'checkout.proTitle' : 'checkout.basicTitle')}</h1>
+          <h1 id="checkout-title">
+            {changing
+              ? t('checkout.change', { plan: sel === 'pro' ? 'Pro' : 'Basic' })
+              : t(sel === 'hours' ? 'checkout.hoursTitle' : sel === 'pro' ? 'checkout.proTitle' : 'checkout.basicTitle')}
+          </h1>
           <div className="choice-grid" role="radiogroup" aria-label={t('account.plan')}>
             {(['basic', 'pro'] as const).map((p) => (
-              <button key={p} type="button" role="radio" aria-checked={sel === p} className={`choice${sel === p ? ' on' : ''}`} onClick={() => setItem(p)}>
+              <button key={p} type="button" role="radio" aria-checked={sel === p} className={`choice${sel === p ? ' on' : ''}`} onClick={() => { setItem(p); setError(null) }}>
                 <span className="choice-top">
                   {p === 'pro' ? 'Pro' : 'Basic'}
                   {user.plan === p && <span className="badge-soft">{t('checkout.current')}</span>}
@@ -170,7 +233,7 @@ export function Checkout() {
               </button>
             ))}
             {user.plan !== 'none' && (
-              <button type="button" role="radio" aria-checked={sel === 'hours'} className={`choice${sel === 'hours' ? ' on' : ''}`} onClick={() => setItem('hours')}>
+              <button type="button" role="radio" aria-checked={sel === 'hours'} className={`choice${sel === 'hours' ? ' on' : ''}`} onClick={() => { setItem('hours'); setError(null) }}>
                 <span className="choice-top">{t('account.addHours')}</span>
                 <b>
                   $3
@@ -213,7 +276,7 @@ export function Checkout() {
             <span>{priceLabel}</span>
           </div>
           {changing ? (
-            // 요금제 바꾸기는 결제창 없이 등록된 결제 수단으로 남은 기간만큼 바로 정산된다.
+            // 요금제 바꾸기는 결제창 없이 처리된다. 올리면 남은 기간의 차액이 등록된 결제 수단으로 바로 청구되고, 내리면 지금은 청구도 환불도 없다.
             <p className="form-note">{t(sel === 'basic' ? 'checkout.downgradeNote' : 'checkout.changeNote')}</p>
           ) : (
             <div className="pay-line muted">
@@ -221,9 +284,28 @@ export function Checkout() {
               <span>{t('checkout.taxLater')}</span>
             </div>
           )}
-          {error && (
+          {/* 같은 요금제로 바뀌었으면 아래 "이미 이 요금제" 안내로 충분하다. */}
+          {error && !(error === 'checkout.subscribed' && same) && (
             <p className="form-error" role="alert">
               {t(error)}
+              {error === 'checkout.pastDue' && (
+                <>
+                  {' '}
+                  <button
+                    className="link-btn"
+                    disabled={busy}
+                    onClick={() => {
+                      setBusy(true)
+                      void openPortal().then((ok) => {
+                        setBusy(false)
+                        if (!ok) setError('account.billingFailed')
+                      })
+                    }}
+                  >
+                    {t('checkout.updatePayment')}
+                  </button>
+                </>
+              )}
             </p>
           )}
           {!same && (!changing || needReconsent) && (
@@ -276,36 +358,63 @@ export function Checkout() {
 
 export function PaidDone() {
   const { t } = useI18n()
-  const auth = useAuth()
-  const item = queryParam('item')
-  const hours = Number(queryParam('q') ?? '0')
+  // 결제는 로그인한 주최자만 하므로, 손님이면 로그인 뒤 이 화면으로 돌아오게 한다.
+  const auth = useHostOnly('/login')
+  // 주소는 누구나 고칠 수 있으므로 아는 값만 믿는다. 모르는 값이면 무엇을 샀는지 말하지 않는 화면을 보인다.
+  const rawItem = queryParam('item')
+  const item: Item | null = rawItem === 'basic' || rawItem === 'pro' || rawItem === 'hours' ? rawItem : null
+  const q = Number(queryParam('q'))
+  const hours = item === 'hours' && Number.isInteger(q) && q >= 1 && q <= MAX_HOURS ? q : null
   const [starting, setStarting] = useState(false)
   const user: User | null = auth.status === 'host' ? auth.user : null
   const [round, setRound] = useState(0)
+  const plan: Plan | null = item === 'pro' || item === 'basic' ? item : null
+  // 이미 구독하던 사람이 요금제를 바꾼 경우(결제 화면이 표시한다): 올리면 남은 기간만큼 시간이 늘고, 내리면 청구가 없다.
+  const changed = plan != null && queryParam('change') === '1'
+  // 새로 산 요금제는 켜진 뒤 그 기간의 결제가 끝나야(몇 초 뒤, transaction.completed) 포함 시간이 들어온다. 그때까지 준비됐다고 하지 않는다.
+  const bought = plan != null && !changed
   // 요금제를 샀거나 바꿨으면 그 요금제가 될 때까지, 시간만 샀으면 요금제가 있을 때까지 확인한다.
-  const want = item === 'pro' || item === 'basic' ? item : null
-  const waiting = (plan: string | undefined) => (want ? plan !== want : plan === 'none')
+  const waiting = (p: string | undefined) => (plan ? p !== plan : p === 'none')
   const [stalled, setStalled] = useState(false)
+  // 시간을 샀으면 결제 전 잔액(결제 화면이 남긴 값)보다 늘어야 들어온 것이다. 값이 없으면 잔액이 있는지로 본다.
+  const [hoursBefore] = useState(() => (item === 'hours' ? readHoursBefore() : null))
+  const [ready, setReady] = useState(false)
 
-  // 결제 결과는 Paddle 웹훅으로 조금 늦게 들어올 수 있다. 요금제가 켜질 때까지 잠깐 다시 확인한다.
+  // 결제 결과는 Paddle 웹훅으로 조금 늦게 들어올 수 있다. 요금제가 켜지거나 산 시간이 들어올 때까지 잠깐 다시 확인한다.
   useEffect(() => {
+    // 요금제를 바꿨으면 15초쯤, 새로 산 요금제·시간은 30초쯤 기다린 뒤 멈추고 다시 확인할 수 있게 알린다.
+    const [interval, maxTries] = item === 'hours' ? [2000, 15] : bought ? [1500, 20] : [1500, 10]
     let tries = 0
     let stop = false
+    let timer = 0
     async function poll() {
-      const r = await api.get<{ user: User | null }>('/api/me')
-      if (stop) return
-      if (r.ok && r.data.user) setUser(r.data.user)
-      if (!r.ok || waiting(r.data.user?.plan)) {
-        // 15초쯤 지나도 안 들어오면 멈추고, 다시 확인할 수 있게 알린다.
-        if (tries++ < 10) setTimeout(() => void poll(), 1500)
-        else setStalled(true)
+      let done: boolean
+      if (item === 'hours') {
+        const r = await api.get<Billing>('/api/billing')
+        if (stop) return
+        done = r.ok && (hoursBefore == null ? r.data.extraSec > 0 : r.data.extraSec > hoursBefore)
+        if (done) clearHoursBefore()
+      } else {
+        // 새로 산 요금제는 계정(머리글·버튼이 쓴다)과 이번 기간의 결제를 함께 본다. 병렬이라 기다림이 늘지 않는다.
+        const [r, b] = await Promise.all([api.get<{ user: User | null }>('/api/me'), bought ? api.get<Billing>('/api/billing') : null])
+        if (stop) return
+        if (r.ok && r.data.user) setUser(r.data.user)
+        done =
+          r.ok &&
+          !waiting(r.data.user?.plan) &&
+          // 결제가 끝났다고 알려 주지 않는 옛 서버는 포함 시간이 들어왔는지로 본다.
+          (b == null || (b.ok && b.data.plan === plan && (b.data.periodPaid || b.data.includedSec > 0)))
       }
+      if (done) return setReady(true)
+      if (tries++ < maxTries) timer = window.setTimeout(() => void poll(), interval)
+      else setStalled(true)
     }
     void poll()
     return () => {
       stop = true
+      clearTimeout(timer)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- want은 주소에서 한 번 정해진다
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- item·plan·bought·hoursBefore는 주소와 첫 화면에서 한 번 정해진다
   }, [round])
 
   async function start() {
@@ -318,7 +427,19 @@ export function PaidDone() {
     }
   }
 
-  const plan: Plan | null = item === 'pro' || item === 'basic' ? item : null
+  if (!user) return <div className="shell" />
+  // 새로 산 요금제가 아직 준비되지 않았으면 시간을 산 경우처럼 "결제를 받았어요"만 보인다.
+  const planShown = plan != null && (ready || changed)
+  const title = planShown
+    ? t('paid.title', { plan: plan === 'pro' ? 'Pro' : 'Basic' })
+    : ready && hours
+      ? t('paid.hoursTitle', { n: String(hours) })
+      : t('paid.receivedTitle')
+  const lead = planShown
+    ? changed
+      ? t(plan === 'pro' ? 'paid.upgradeLead' : 'paid.downgradeLead', { email: user.email })
+      : t('paid.lead', { email: user.email, hours: plan === 'pro' ? '30' : '10' })
+    : t(ready && item === 'hours' ? 'paid.hoursLead' : 'paid.receivedLead', { email: user.email })
   return (
     <div className="shell">
       <Header />
@@ -326,11 +447,11 @@ export function PaidDone() {
         <span className="status-brand big" aria-hidden="true">
           <BrandMark size={96} />
         </span>
-        <div className="status-text">
-          <h1>{plan ? t('paid.title', { plan: plan === 'pro' ? 'Pro' : 'Basic' }) : t('paid.hoursTitle', { n: String(hours || 1) })}</h1>
-          <p className="lead">{user ? t(plan ? 'paid.lead' : 'paid.hoursLead', { email: user.email, hours: plan === 'pro' ? '30' : '10' }) : ''}</p>
+        <div className="status-text" aria-live="polite">
+          <h1>{title}</h1>
+          <p className="lead">{lead}</p>
         </div>
-        {plan && (
+        {planShown && (
           <ol className="steps3">
             <li>
               <b>{t('paid.step1')}</b>
@@ -346,9 +467,9 @@ export function PaidDone() {
             </li>
           </ol>
         )}
-        {stalled && waiting(user?.plan) && (
+        {stalled && !ready && (
           <p className="form-note" role="status">
-            {t('paid.pending')}{' '}
+            {t(changed ? 'paid.changePending' : 'paid.pending')}{' '}
             <button
               className="link-btn"
               onClick={() => {
@@ -361,7 +482,7 @@ export function PaidDone() {
           </p>
         )}
         <div className="row status-actions">
-          <button className="btn btn-primary btn-lg" onClick={() => void start()} disabled={starting || user?.plan === 'none'}>
+          <button className="btn btn-primary btn-lg" onClick={() => void start()} disabled={starting || (bought ? !ready : user.plan === 'none')}>
             {t(plan ? 'paid.firstMeeting' : 'home.startNow')}
           </button>
           <button className="btn btn-outline btn-lg" onClick={() => navigate('/')}>

@@ -32,6 +32,14 @@ pub fn join(a: &str, b: &str) -> String {
     }
 }
 
+/// 앞에서부터 `max`자(문자 경계)까지만 남긴다.
+pub fn truncate_chars(mut text: String, max: usize) -> String {
+    if let Some((end, _)) = text.char_indices().nth(max) {
+        text.truncate(end);
+    }
+    text
+}
+
 /// 끝난 문장들과 아직 끝나지 않은 나머지로 나눈다.
 /// `.`는 뒤가 공백이거나 끝일 때만 문장 끝으로 본다(`3.5` 같은 숫자를 자르지 않게).
 pub fn split_sentences(text: &str) -> (Vec<String>, String) {
@@ -82,6 +90,12 @@ mod tests {
         assert_eq!(normalize("저희  투자팀은\n주로"), "저희 투자팀은 주로");
         assert_eq!(normalize("主に AI に"), "主にAIに");
         assert_eq!(normalize("hello   world"), "hello world");
+    }
+
+    #[test]
+    fn truncates_on_character_boundaries() {
+        assert_eq!(truncate_chars("가나다라".into(), 2), "가나");
+        assert_eq!(truncate_chars("abc".into(), 5), "abc");
     }
 
     #[test]

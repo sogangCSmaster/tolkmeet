@@ -2,6 +2,7 @@
 // 약관·개인정보·환불 페이지의 공통 틀(영어·한국어). 머리 막대, 제목, 목차(있으면), 본문, 바닥 줄.
 import Base from '../layouts/Base.astro'
 import Mark from './Mark.astro'
+import Business from './Business.astro'
 import { en } from '../i18n/en'
 import { ko } from '../i18n/ko'
 import '../styles/legal.css'
@@ -81,6 +82,7 @@ const t = { ...ui.dict, metaTitle, metaDescription, path: href(page) }
     </main>
 
     <footer class="legal-foot">
+      <Business dict={ui.dict} class="legal-biz" />
       © 2026 {lang === 'en' ? <span lang="ko">휘슬리</span> : '휘슬리'}{pages.map((p) => <> · <a href={href(p)}>{ui.foot[p]}</a></>)} · <a class="legal-lang" href={otherHref} lang={ui.other.lang} hreflang={ui.other.lang}>{ui.other.label}</a>
     </footer>
   </div>

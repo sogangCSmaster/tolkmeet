@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { useI18n } from '../lib/i18n'
-import { navigate } from '../lib/router'
+import { authPath, navigate, nextParam, withNext } from '../lib/router'
 import { Header } from './Header'
 
 /** 인증 화면 공통 틀: 머리글 + 가운데 카드. `aside`는 카드 아래 작은 링크 줄. */
@@ -42,11 +42,14 @@ function GoogleMark() {
   )
 }
 
-/** Google로 계속하기: 서버가 Google로 보냈다가 돌아오면 로그인된 채로 홈에 온다. */
+/**
+ * Google로 계속하기: 서버가 Google로 보냈다가 돌아오면 로그인된 채로 가려던 곳(next, 없으면 홈)에 온다.
+ * 서버도 next를 같은 규칙으로 다시 확인하고, 2차 인증이 필요하면 로그인 화면에 next를 붙여 보낸다.
+ */
 export function GoogleButton() {
   const { t, locale } = useI18n()
   return (
-    <a className="btn btn-lg btn-plain" href={`/api/auth/google?locale=${locale}`}>
+    <a className="btn btn-lg btn-plain" href={withNext(`/api/auth/google?locale=${locale}`, nextParam())}>
       <GoogleMark />
       {t('auth.google')}
     </a>
@@ -61,11 +64,11 @@ export function Divider({ label }: { label: string }) {
   )
 }
 
-/** 머리 줄 오른쪽의 계정 전환 링크(가입 ↔ 로그인). */
-export function AuthSwitch({ prompt, to, label }: { prompt: string; to: string; label: string }) {
+/** 머리 줄 오른쪽의 계정 전환 링크(가입 ↔ 로그인). 돌아갈 주소(next)는 그대로 넘긴다. */
+export function AuthSwitch({ prompt, to, label }: { prompt: string; to: '/login' | '/signup'; label: string }) {
   return (
     <p className="auth-switch">
-      {prompt} <InLink to={to}>{label}</InLink>
+      {prompt} <InLink to={authPath(to)}>{label}</InLink>
     </p>
   )
 }

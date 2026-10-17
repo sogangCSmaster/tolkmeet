@@ -1,12 +1,12 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
-import { api, type Billing, type CaptionSize, type Theme, type User } from '../lib/api'
-import { features, logout, setUser, useAuth, userName } from '../lib/auth'
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { api, openPortal, type Billing, type CaptionSize, type Theme, type User, type UserPrefs } from '../lib/api'
+import { features, logout, setUser, userName } from '../lib/auth'
 import { formatDate, formatDuration, relativeTime, deviceLabel } from '../lib/format'
 import { useI18n, type MessageKey } from '../lib/i18n'
 import '../lib/i18nPages'
 import { LANGUAGES } from '../lib/languages'
 import { registerPasskey, passkeySupported } from '../lib/passkey'
-import { navigate, queryParam, replacePath } from '../lib/router'
+import { here, navigate, queryParam, replacePath, useHostOnly, withNext } from '../lib/router'
 import { applyCaptionSize, applyTheme, currentCaptionSize, currentTheme } from '../lib/theme'
 import { InLink } from './AuthBits'
 import { CodeInput } from './CodeInput'
@@ -14,6 +14,7 @@ import { Header } from './Header'
 import { Icon } from './Icon'
 import { Select } from './Select'
 import { Switch } from './Switch'
+import { UnpaidNotice } from './UnpaidNotice'
 
 const LANG_OPTIONS = LANGUAGES.map((l) => ({ value: l.code as string, label: l.name }))
 
@@ -26,6 +27,11 @@ function errorKey(code: string): MessageKey {
       return 'account.reauth'
     case 'locked':
       return 'auth.locked'
+    case 'busy':
+      return 'auth.busy'
+    // 세션이 끝났다(로그인 상태를 다시 확인해 로그인 화면으로 보낸다)
+    case 'login':
+      return 'account.reauth'
     case 'password':
       return 'auth.passwordShort'
     case 'breached':
@@ -45,27 +51,54 @@ function errorKey(code: string): MessageKey {
   }
 }
 
-/** 로그인한 사람만. 아니면 로그인 화면으로 보낸다. */
+/** 로그인한 사람만. 아니면 로그인 화면으로 보낸다(로그인 뒤 이 화면으로 돌아온다). */
 function useUser(): User | null {
-  const auth = useAuth()
-  useEffect(() => {
-    if (auth.status === 'guest') navigate('/login')
-  }, [auth.status])
+  const auth = useHostOnly('/login')
   return auth.status === 'host' ? auth.user : null
 }
 
 type Section = 'profile' | 'plan' | 'usage' | 'prefs' | 'security' | 'data'
+const SECTIONS: Section[] = ['profile', 'plan', 'usage', 'prefs', 'data']
 
 function AccountShell({ user, active, title, children }: { user: User; active: Section; title: string; children: ReactNode }) {
   const { t } = useI18n()
+  // 계정 화면 안에서는 지금 보는 칸(주소의 #)을 표시한다.
+  const [section, setSection] = useState<Section>(() => {
+    const hash = location.hash.slice(1) as Section
+    return active !== 'security' && SECTIONS.includes(hash) ? hash : active
+  })
+  // 주소의 #만 바뀌면(직접 고치거나 앞뒤로 가기) 화면을 다시 그리지 않으므로 직접 듣는다.
+  useEffect(() => {
+    if (active === 'security') return
+    const onHash = () => {
+      const hash = location.hash.slice(1) as Section
+      if (SECTIONS.includes(hash)) setSection(hash)
+    }
+    addEventListener('hashchange', onHash)
+    return () => removeEventListener('hashchange', onHash)
+  }, [active])
+  const [loggingOut, setLoggingOut] = useState(false)
+  const [logoutFailed, setLogoutFailed] = useState(false)
   const items: [Section, MessageKey, string][] = [
     ['profile', 'account.profile', '/account#profile'],
     ['plan', 'account.plan', '/account#plan'],
-    ['usage', 'account.usage', '/account#usage'],
+    // 요금제가 없으면 사용량 칸이 없다.
+    ...(user.plan !== 'none' ? ([['usage', 'account.usage', '/account#usage']] as [Section, MessageKey, string][]) : []),
     ['prefs', 'account.prefs', '/account#prefs'],
     ['security', 'account.security', '/account/security'],
     ['data', 'account.data', '/account#data'],
   ]
+
+  // 성공하면 auth 상태가 바뀌어 화면이 홈으로 간다(머리글의 로그아웃과 같다).
+  async function out() {
+    if (loggingOut) return
+    setLoggingOut(true)
+    setLogoutFailed(false)
+    const ok = await logout()
+    setLoggingOut(false)
+    setLogoutFailed(!ok)
+  }
+
   return (
     <div className="shell">
       <Header />
@@ -85,25 +118,32 @@ function AccountShell({ user, active, title, children }: { user: User; active: S
               <a
                 key={id}
                 href={href}
-                aria-current={id === active ? 'page' : undefined}
+                aria-current={id === section ? 'page' : undefined}
                 onClick={(e) => {
+                  if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return
+                  e.preventDefault()
                   const [path, hash] = href.split('#')
                   if (location.pathname === path && hash) {
-                    e.preventDefault()
+                    setSection(id)
+                    history.replaceState(null, '', href)
                     document.getElementById(hash)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
                     return
                   }
-                  e.preventDefault()
                   navigate(href)
                 }}
               >
                 {t(key)}
               </a>
             ))}
-            <button className="settings-logout" onClick={() => void logout().then(() => navigate('/'))}>
+            <button className="settings-logout" disabled={loggingOut} onClick={() => void out()}>
               {t('auth.logout')}
             </button>
           </nav>
+          {logoutFailed && (
+            <p className="form-error" role="alert">
+              {t('auth.logoutFailed')}
+            </p>
+          )}
         </aside>
         <main className="settings-main">
           <h1>{title}</h1>
@@ -115,8 +155,14 @@ function AccountShell({ user, active, title, children }: { user: User; active: S
 }
 
 function Card({ id, title, action, children }: { id?: string; title: string; action?: ReactNode; children: ReactNode }) {
+  const ref = useRef<HTMLElement>(null)
+  // 다른 화면에서 /account#data처럼 들어오면 브라우저는 칸이 그려지기 전이라 못 찾는다. 칸이 생길 때 직접 찾아간다
+  // (사용량 칸은 요금 정보를 받은 뒤에야 생긴다).
+  useEffect(() => {
+    if (id && location.hash === `#${id}`) ref.current?.scrollIntoView({ block: 'start' })
+  }, [id])
   return (
-    <section className="settings-card" id={id} aria-labelledby={id ? `${id}-title` : undefined}>
+    <section ref={ref} className="settings-card" id={id} aria-labelledby={id ? `${id}-title` : undefined}>
       <div className="settings-card-head">
         <h2 id={id ? `${id}-title` : undefined}>{title}</h2>
         {action}
@@ -144,7 +190,14 @@ function Message({ error, note }: { error?: MessageKey | null; note?: MessageKey
         {error === 'account.reauth' && (
           <>
             {' '}
-            <button className="link-btn" onClick={() => void logout().then(() => navigate('/login'))}>
+            <button
+              className="link-btn"
+              onClick={() => {
+                // 로그아웃하면 화면(useHostOnly)이 먼저 홈으로 옮기므로 돌아올 주소는 그 전에 정해 둔다.
+                const to = withNext('/login', here())
+                void logout().then((ok) => ok && replacePath(to))
+              }}
+            >
               {t('account.loginAgain')}
             </button>
           </>
@@ -166,6 +219,7 @@ function EditableRow({ label, value, onSave, maxLength = 60 }: { label: string; 
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(value)
   const [saving, setSaving] = useState(false)
+  const [failed, setFailed] = useState(false)
   if (!editing)
     return (
       <Row label={label}>
@@ -174,6 +228,7 @@ function EditableRow({ label, value, onSave, maxLength = 60 }: { label: string; 
           className="link-btn"
           onClick={() => {
             setDraft(value)
+            setFailed(false)
             setEditing(true)
           }}
         >
@@ -188,9 +243,11 @@ function EditableRow({ label, value, onSave, maxLength = 60 }: { label: string; 
         onSubmit={async (e) => {
           e.preventDefault()
           setSaving(true)
+          setFailed(false)
           const ok = await onSave(draft.trim())
           setSaving(false)
           if (ok) setEditing(false)
+          else setFailed(true)
         }}
       >
         <input className="input input-sm" value={draft} maxLength={maxLength} autoFocus onChange={(e) => setDraft(e.target.value)} aria-label={label} />
@@ -200,6 +257,7 @@ function EditableRow({ label, value, onSave, maxLength = 60 }: { label: string; 
         <button type="button" className="btn btn-sm btn-outline" onClick={() => setEditing(false)}>
           {t('room.cancel')}
         </button>
+        {failed && <Message error="account.failed" />}
       </form>
     </Row>
   )
@@ -351,7 +409,8 @@ function PlanCard({ user }: { user: User }) {
     setError(null)
     const r = await api.post(`/api/billing/${action}`, { plan: plan ?? '' })
     setBusy(false)
-    if (!r.ok) return setError('account.billingFailed')
+    // 지난 결제가 실패한 구독은 Paddle이 바꾸지 않는다. 결제 수단부터 고치게 안내한다.
+    if (!r.ok) return setError(r.code === 'past_due' ? 'checkout.pastDue' : 'account.billingFailed')
     reload()
     // 요금제가 바뀌면 화면 맨 위(머리글·홈)도 맞춘다.
     const me = await api.get<{ user: User }>('/api/me')
@@ -359,9 +418,7 @@ function PlanCard({ user }: { user: User }) {
   }
 
   async function portal() {
-    const r = await api.post<{ url: string }>('/api/billing/portal')
-    if (r.ok) location.href = r.data.url
-    else setError('account.billingFailed')
+    if (!(await openPortal())) setError('account.billingFailed')
   }
 
   const plan = user.plan
@@ -387,7 +444,7 @@ function PlanCard({ user }: { user: User }) {
                 ` · ${t(user.planCanceled ? 'account.endsOn' : 'account.renewsOn', { date: formatDate(user.planRenewsAt, locale) })}`}
             </p>
             <div className="row">
-              {/* 바꾸면 남은 기간만큼 바로 정산되므로 결제 화면에서 가격을 보고 확인한 뒤 바꾼다. */}
+              {/* 올리면 남은 기간의 차액이 바로 청구되고(내리면 청구·환불 없음) 결제 화면에서 안내를 보고 확인한 뒤 바꾼다. */}
               {!user.operator && (
                 <InLink to={`/checkout?item=${plan === 'pro' ? 'basic' : 'pro'}`} className="btn btn-primary">
                   {t(plan === 'pro' ? 'account.toBasic' : 'account.toPro')}
@@ -412,7 +469,16 @@ function PlanCard({ user }: { user: User }) {
                   </button>
                 ))}
             </div>
-            <Message error={error} />
+            {error === 'checkout.pastDue' ? (
+              <p className="form-error" role="alert">
+                {t(error)}{' '}
+                <button className="link-btn" onClick={() => void portal()}>
+                  {t('checkout.updatePayment')}
+                </button>
+              </p>
+            ) : (
+              <Message error={error} />
+            )}
           </div>
         )}
       </Card>
@@ -427,6 +493,8 @@ function UsageCard({ billing }: { billing: Billing }) {
   const pct = Math.min(100, (billing.usedSec / Math.max(billing.includedSec, 1)) * 100)
   return (
     <Card id="usage" title={t('account.usage')} action={<span className="card-aside">{t('account.resetsOn', { date: formatDate(billing.resetsAt, locale) })}</span>}>
+      {/* 포함 시간은 결제 기간마다 채워진다. 아래 막대는 달력 달별 사용량이다. */}
+      <p className="card-lead">{t('account.thisPeriod')}</p>
       <p className="usage-big">
         {formatDuration(billing.usedSec, t)}
         <small> / {t('account.usedOf', { total: formatDuration(billing.includedSec, t) })}</small>
@@ -434,6 +502,7 @@ function UsageCard({ billing }: { billing: Billing }) {
       <div className="meter" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(pct)} aria-label={t('account.usage')}>
         <span style={{ width: `${pct}%` }} />
       </div>
+      {billing.pastDue && <UnpaidNotice />}
       <div className="usage-bars" aria-hidden="true">
         {billing.history.map((h, i) => {
           const month = Number(h.period.slice(5))
@@ -474,7 +543,25 @@ function PrefsCard({ user }: { user: User }) {
   const p = user.prefs
   const [theme, setTheme] = useState<Theme>(p.theme ?? currentTheme())
   const [size, setSize] = useState<CaptionSize>(p.captionSize ?? currentCaptionSize())
-  const save = (prefs: object) => void patchAccount({ prefs })
+  const [error, setError] = useState<MessageKey | null>(null)
+  const seq = useRef(0)
+  const queue = useRef<Promise<unknown>>(Promise.resolve())
+
+  // 빠르게 여러 번 바꿔도 마지막으로 누른 값이 이긴다: 요청은 차례로 보내고(서버에 순서대로 닿게),
+  // 응답은 마지막 요청의 것만 반영한다(앞 요청의 사용자 정보가 테마·자막 크기를 되돌리지 않게).
+  function save(prefs: UserPrefs, undo?: () => void) {
+    const id = ++seq.current
+    setError(null)
+    const sent = queue.current.then(() => api.patch<User>('/api/account', { prefs }))
+    queue.current = sent
+    void sent.then((r) => {
+      if (id !== seq.current) return
+      if (r.ok) return setUser(r.data)
+      undo?.()
+      setError('account.failed')
+    })
+  }
+
   return (
     <Card id="prefs" title={t('account.prefs')}>
       <Row label={t('lang.mine')}>
@@ -493,9 +580,13 @@ function PrefsCard({ user }: { user: User }) {
             ['dark', t('account.themeDark')],
           ]}
           onChange={(v) => {
+            const before = theme
             setTheme(v)
             applyTheme(v)
-            save({ theme: v })
+            save({ theme: v }, () => {
+              setTheme(before)
+              applyTheme(before)
+            })
           }}
         />
       </Row>
@@ -509,15 +600,20 @@ function PrefsCard({ user }: { user: User }) {
             ['l', t('account.sizeL')],
           ]}
           onChange={(v) => {
+            const before = size
             setSize(v)
             applyCaptionSize(v)
-            save({ captionSize: v })
+            save({ captionSize: v }, () => {
+              setSize(before)
+              applyCaptionSize(before)
+            })
           }}
         />
       </Row>
       <Row label={t('account.savePrompt')}>
         <Switch checked={p.savePrompt ?? true} onChange={(savePrompt) => save({ savePrompt })} label={t('account.savePrompt')} hideLabel />
       </Row>
+      <Message error={error} />
     </Card>
   )
 }
@@ -561,7 +657,7 @@ function DataCard({ user }: { user: User }) {
     setBusy(false)
     if (!r.ok) return setError(r.code === 'confirm' ? 'account.confirmMismatch' : r.code === 'billing' ? 'account.billingFailed' : errorKey(r.code))
     await logout()
-    navigate('/')
+    replacePath('/')
   }
 
   return (
@@ -623,14 +719,22 @@ async function refreshUser() {
 }
 
 /** 민감한 작업 전 비밀번호 한 번(비밀번호가 없는 계정은 묻지 않고 서버가 최근 로그인을 본다). */
-function PasswordGate({ user, onPass, label, busy = false }: { user: User; onPass: (password: string) => void; label: string; busy?: boolean }) {
+function PasswordGate({ user, onPass, onCancel, label, busy = false }: { user: User; onPass: (password: string) => void; onCancel?: () => void; label: string; busy?: boolean }) {
   const { t } = useI18n()
   const [password, setPassword] = useState('')
+  const cancel = onCancel && (
+    <button type="button" className="btn btn-sm btn-outline" onClick={onCancel}>
+      {t('room.cancel')}
+    </button>
+  )
   if (!user.hasPassword)
     return (
-      <button className="btn btn-primary" disabled={busy} onClick={() => onPass('')}>
-        {label}
-      </button>
+      <div className="row">
+        <button className="btn btn-primary" disabled={busy} onClick={() => onPass('')}>
+          {label}
+        </button>
+        {cancel}
+      </div>
     )
   return (
     <form
@@ -644,6 +748,7 @@ function PasswordGate({ user, onPass, label, busy = false }: { user: User; onPas
       <button className="btn btn-sm btn-primary" disabled={!password || busy}>
         {label}
       </button>
+      {cancel}
     </form>
   )
 }
@@ -660,9 +765,8 @@ function PasskeyCard({ user }: { user: User }) {
       setAdding(false)
       return refreshUser()
     }
-    if (r === 'reauth') setError('account.reauth')
-    else if (r === 'current') setError('account.wrongPassword')
-    else if (r === 'failed') setError('account.passkeyFailed')
+    if (r === 'failed' || r === 'error' || r === 'limited') setError('account.passkeyFailed')
+    else if (r !== 'cancelled') setError(errorKey(r))
   }
 
   async function remove(id: string) {
@@ -675,9 +779,17 @@ function PasskeyCard({ user }: { user: User }) {
     <Card
       title={t('account.passkeys')}
       action={
-        passkeySupported &&
-        !adding && (
-          <button className="btn btn-primary btn-sm" onClick={() => setAdding(true)}>
+        passkeySupported && (
+          // 비밀번호가 없는 계정은 물을 것이 없으므로 바로 등록한다. 비밀번호를 묻는 중에 다시 누르면 접는다.
+          <button
+            className="btn btn-primary btn-sm"
+            aria-expanded={user.hasPassword ? adding : undefined}
+            onClick={() => {
+              setError(null)
+              if (user.hasPassword) setAdding((a) => !a)
+              else void add('')
+            }}
+          >
             <Icon name="add" />
             {t('account.addPasskey')}
           </button>
@@ -687,7 +799,7 @@ function PasskeyCard({ user }: { user: User }) {
       <p className="card-lead">{t('account.passkeyLead')}</p>
       {adding && (
         <div className="settings-row column">
-          <PasswordGate user={user} label={t('account.addPasskey')} onPass={(p) => void add(p)} />
+          <PasswordGate user={user} label={t('account.addPasskey')} onPass={(p) => void add(p)} onCancel={() => setAdding(false)} />
         </div>
       )}
       {user.passkeys.map((k) => (
@@ -755,6 +867,10 @@ function TotpCard({ user }: { user: User }) {
     if (r.ok) {
       setGate(false)
       setSetup(r.data)
+    } else if (r.code === 'enabled') {
+      // 다른 탭에서 이미 켰다: 틀린 게 아니라 화면이 뒤처진 것이므로 상태를 새로 받는다.
+      setGate(false)
+      void refreshUser()
     } else setError(errorKey(r.code))
   }
 
@@ -762,7 +878,8 @@ function TotpCard({ user }: { user: User }) {
     setError(null)
     const r = await api.post<{ recoveryCodes: string[] }>('/api/totp/enable', { code: value })
     setCode('')
-    if (!r.ok) return setError(r.status === 429 ? 'auth.locked' : 'mfa.wrong')
+    // 세션 만료(401)·서버 오류는 틀린 코드가 아니다. 만료면 로그인 상태를 다시 확인해 로그인 화면으로 간다.
+    if (!r.ok) return setError(r.status === 429 ? 'auth.locked' : errorKey(r.code))
     setSetup(null)
     setCodes(r.data.recoveryCodes)
     void refreshUser()
@@ -783,14 +900,19 @@ function TotpCard({ user }: { user: User }) {
     <Card
       title={t('account.twoStepApp')}
       action={
+        // 켜는 중(비밀번호 확인·QR)이면 켜진 것으로, 끄는 확인 중이면 꺼진 것으로 보인다. 다시 누르면 그 단계를 접는다.
         <Switch
-          checked={user.totp || !!setup}
+          checked={user.totp ? mode !== 'disable' : gate || !!setup}
           onChange={(on) => {
             setError(null)
             setCodes(null)
-            if (on && !user.totp) setGate(true)
-            if (!on && setup) setSetup(null)
-            if (!on && user.totp) setMode('disable')
+            setCode('')
+            if (user.totp) setMode(on ? 'idle' : 'disable')
+            else if (on) setGate(true)
+            else {
+              setGate(false)
+              setSetup(null)
+            }
           }}
           label={t('account.twoStepApp')}
           hideLabel
@@ -800,7 +922,7 @@ function TotpCard({ user }: { user: User }) {
       <p className="card-lead">{t('account.twoStepLead')}</p>
       {gate && !setup && (
         <div className="settings-row column">
-          <PasswordGate user={user} label={t('account.continue')} onPass={(p) => void start(p)} />
+          <PasswordGate user={user} label={t('account.continue')} onPass={(p) => void start(p)} onCancel={() => setGate(false)} />
         </div>
       )}
       {setup && (
@@ -817,6 +939,16 @@ function TotpCard({ user }: { user: User }) {
               {t('account.totpKey')} <code className="secret">{setup.secret}</code>
             </p>
             <CodeInput value={code} onChange={setCode} onComplete={(v) => void enable(v)} label={t('verify.code')} autoFocus />
+            <button
+              className="link-btn"
+              onClick={() => {
+                setSetup(null)
+                setCode('')
+                setError(null)
+              }}
+            >
+              {t('room.cancel')}
+            </button>
           </div>
         </div>
       )}

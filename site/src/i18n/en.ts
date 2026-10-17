@@ -168,6 +168,8 @@ export const en = {
   footerOpenSource: 'Open source under AGPL-3.0',
   footerGithub: 'Source code on GitHub',
   footerCopyright: '© 2026 Tolkmeet',
+  /** 사업자 정보 줄(전자상거래법상 첫 화면 표시). 값은 site.ts의 COMPANY. */
+  biz: { name: 'Operator', rep: 'Representative', regNo: 'Business registration no.', address: 'Address', email: 'Contact', country: ', Republic of Korea' },
 }
 
 export type Dict = typeof en

@@ -1,8 +1,15 @@
 /** 날짜·시간·길이 표시(화면 언어의 형식으로). 시각은 서버의 유닉스 초. */
 import type { Locale } from './i18n'
 
+/** 올해가 아니면 연도도 붙인다. */
 export function formatDate(sec: number, locale: Locale, withWeekday = false): string {
-  return new Date(sec * 1000).toLocaleDateString(locale, { month: 'long', day: 'numeric', ...(withWeekday ? { weekday: 'short' } : {}) })
+  const d = new Date(sec * 1000)
+  return d.toLocaleDateString(locale, {
+    ...(d.getFullYear() !== new Date().getFullYear() ? { year: 'numeric' } : {}),
+    month: 'long',
+    day: 'numeric',
+    ...(withWeekday ? { weekday: 'short' } : {}),
+  })
 }
 
 export function formatTime(sec: number, locale: Locale): string {
@@ -26,16 +33,25 @@ export function relativeTime(sec: number, locale: Locale): string {
   return rtf.format(Math.round(diff / (365 * 86_400)), 'year')
 }
 
-/** 초 → "2시간 40분" / "2 h 40 min" / "2時間40分"(분 단위). 문구는 i18n의 ended.* 를 쓴다. */
-export function formatDuration(sec: number, t: (key: 'ended.minutes' | 'ended.hoursMinutes', p: Record<string, string>) => string): string {
+/** 초 → "2시간 40분" / "2 h 40 min" / "2時間40分"(분 단위, 0분이면 "2시간"). 문구는 i18n의 ended.* 를 쓴다. */
+export function formatDuration(sec: number, t: (key: 'ended.minutes' | 'ended.hours' | 'ended.hoursMinutes', p: Record<string, string>) => string): string {
   const min = Math.max(0, Math.round(sec / 60))
   if (min < 60) return t('ended.minutes', { n: String(min) })
-  return t('ended.hoursMinutes', { h: String(Math.floor(min / 60)), m: String(min % 60) })
+  const h = String(Math.floor(min / 60))
+  return min % 60 === 0 ? t('ended.hours', { n: h }) : t('ended.hoursMinutes', { h, m: String(min % 60) })
 }
 
-/** 시간대 이름 없이 그 도시의 같은 시각(예약 화면의 "서울 오후 3:00 · 뉴욕 오전 2:00"). */
+/** 시간대 이름 없이 그 도시의 같은 시각(예약 화면의 "서울 오후 3:00 · 뉴욕 오전 2:00"). 이 기기와 날짜가 다르면 날짜도 붙인다. */
 export function timeIn(sec: number, locale: Locale, timeZone: string): string {
-  return new Date(sec * 1000).toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit', timeZone })
+  const d = new Date(sec * 1000)
+  // en-CA는 YYYY-MM-DD라 두 시간대의 날짜를 그대로 견줄 수 있다.
+  const sameDay = d.toLocaleDateString('en-CA', { timeZone }) === d.toLocaleDateString('en-CA')
+  return d.toLocaleString(locale, { ...(sameDay ? {} : { month: 'short', day: 'numeric' }), hour: 'numeric', minute: '2-digit', timeZone })
+}
+
+/** 이 기기 시간대의 짧은 이름(GMT+9, EDT, JST 등). 초대 글을 다른 시간대에서 읽어도 시각을 알 수 있게. */
+export function zoneName(sec: number, locale: Locale): string {
+  return new Intl.DateTimeFormat(locale, { timeZoneName: 'short' }).formatToParts(new Date(sec * 1000)).find((p) => p.type === 'timeZoneName')?.value ?? ''
 }
 
 /** 사용자 에이전트 → "Mac · Chrome" */

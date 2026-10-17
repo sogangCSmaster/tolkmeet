@@ -6,10 +6,13 @@ import { useAuth, userName } from '../lib/auth'
 import type { LocalMedia } from '../lib/media'
 import type { Prefs } from '../lib/prefs'
 import { legalUrl } from '../lib/links'
+import { meetingPath } from '../lib/meetings'
+import { navigate, replacePath } from '../lib/router'
 import { Icon } from './Icon'
 import { LanguageSelects } from './LanguageSelects'
 import { Rich } from './Rich'
 import { Header } from './Header'
+import { StatusPage } from './StatusPage'
 import { VideoTile } from './VideoTile'
 
 type Props = {
@@ -34,6 +37,27 @@ export function Lobby({ code, local, room, prefs, media, onPrefsChange, onMediaC
     filled.current = true
     if (!prefs.name && auth.status === 'host') onPrefsChange({ ...prefs, name: userName(auth.user) })
   }, [auth, prefs, onPrefsChange])
+
+  // 예약할 때 정한 언어 쌍이 있으면, 손님의 화면 언어가 그중 하나일 때 그 언어를 내 언어로 골라 둔다(한 번만).
+  const picked = useRef(false)
+  useEffect(() => {
+    if (picked.current || auth.status !== 'guest' || !room?.langA || !room.langB) return
+    picked.current = true
+    const mine = room.langA === locale ? room.langA : room.langB === locale ? room.langB : null
+    if (!mine) return
+    const other = mine === room.langA ? room.langB : room.langA
+    if (prefs.lang !== mine || prefs.partnerLang !== other) onPrefsChange({ ...prefs, lang: mine, partnerLang: other })
+  }, [auth.status, room, locale, prefs, onPrefsChange])
+
+  // 자막 화면·대면 대화는 주최자 기기에서만 돈다. 주최자는 그 화면으로 보내고, 손님에게는 들어갈 곳이 없다고 알린다.
+  const kind = room?.kind
+  const hostOnly = !!kind && kind !== 'meeting'
+  useEffect(() => {
+    if (!kind || kind === 'meeting') return
+    if (auth.status === 'host') replacePath(meetingPath({ code, kind }))
+    // 쓸 일이 없으니 잡아 둔 카메라·마이크를 바로 놓는다.
+    else if (auth.status === 'guest') local?.stream.getTracks().forEach((tr) => tr.stop())
+  }, [kind, auth.status, code, local])
   const hasMic = !!local?.stream.getAudioTracks().length
   const hasCam = !!local?.stream.getVideoTracks().length
   const name = prefs.name.trim()
@@ -41,6 +65,23 @@ export function Lobby({ code, local, room, prefs, media, onPrefsChange, onMediaC
   function submit(e: FormEvent) {
     e.preventDefault()
     if (name && local && room) onJoin()
+  }
+
+  if (hostOnly) {
+    if (auth.status !== 'guest') return <div className="shell" />
+    return (
+      <StatusPage
+        icon={kind === 'live' ? 'subtitles' : 'forum'}
+        eyebrow={room?.host ? t('lobby.hostMeeting', { host: room.host }) : t('lobby.meeting', { code })}
+        title={t('lobby.hostDeviceTitle')}
+        body={t('lobby.hostDeviceBody')}
+        actions={
+          <button className="btn btn-primary" onClick={() => navigate('/')}>
+            {t('room.home')}
+          </button>
+        }
+      />
+    )
   }
 
   return (

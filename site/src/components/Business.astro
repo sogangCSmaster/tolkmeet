@@ -1,0 +1,16 @@
+---
+// 바닥에 두는 사업자 정보 한 줄. 한국어 값은 다른 언어 페이지에서도 한국어로 읽히게 lang을 단다.
+import { COMPANY } from '../site'
+import type { Dict } from '../i18n/en'
+
+interface Props {
+  dict: Dict
+  class?: string
+}
+const { dict, class: className } = Astro.props
+const b = dict.biz
+const ko = dict.lang === 'ko' ? undefined : 'ko'
+---
+<p class={className}>
+  {b.name} <span lang={ko}>{COMPANY.name}</span> · {b.rep} <span lang={ko}>{COMPANY.rep}</span> · {b.regNo} {COMPANY.regNo} · {b.address} <span lang={ko}>{COMPANY.address}</span>{b.country} · {b.email} <a href={`mailto:${COMPANY.email}`}>{COMPANY.email}</a>
+</p>

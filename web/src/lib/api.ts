@@ -65,6 +65,11 @@ export type Billing = {
   usedSec: number
   extraSec: number
   remainingSec: number
+  periodStart: number | null
+  /** 이번 기간의 결제가 끝나 포함 시간을 받았는지. 첫 결제 직후 잠깐, 또는 갱신 결제가 밀리면 false(그동안 포함 시간은 0). */
+  periodPaid: boolean
+  /** 갱신 결제가 실패해 연체 중이다(첫 결제를 확인하는 몇 초는 아니다). 이때만 결제 수단 업데이트를 안내한다. */
+  pastDue: boolean
   resetsAt: number
   renewsAt: number | null
   canceled: boolean
@@ -73,10 +78,18 @@ export type Billing = {
   history: { period: string; seconds: number }[]
 }
 
-export type RoomInfo = { translation: boolean; title: string; host: string }
+/** kind·langA·langB는 예약 회의에서 온다(새 서버만 준다. 언어는 비어 있을 수 있다). */
+export type RoomInfo = { translation: boolean; title: string; host: string; kind?: Meeting['kind']; langA?: string; langB?: string }
 
 /** 서버 응답: 성공이면 data, 실패면 상태 코드와 서버가 준 오류 코드(`{code}`). 네트워크 오류는 status 0. */
 export type Result<T> = { ok: true; data: T } | { ok: false; status: number; code: string }
+
+let unauthorized: (() => void) | null = null
+
+/** 로그인이 필요한 요청이 세션 없음(401 `login`)을 받으면 부른다. 로그인·인증 요청 자체는 이 코드를 주지 않는다. */
+export function onUnauthorized(cb: () => void) {
+  unauthorized = cb
+}
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<Result<T>> {
   try {
@@ -89,6 +102,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<Re
     const json = text ? (JSON.parse(text) as unknown) : null
     if (res.ok) return { ok: true, data: json as T }
     const code = json && typeof json === 'object' && 'code' in json ? String((json as { code: unknown }).code) : ''
+    if (res.status === 401 && code === 'login') unauthorized?.()
     return { ok: false, status: res.status, code }
   } catch {
     return { ok: false, status: 0, code: 'network' }
@@ -102,6 +116,14 @@ export const api = {
   del: <T = null>(path: string, body?: unknown) => call<T>('DELETE', path, body),
 }
 
+/** 결제 수단·영수증을 고치는 Paddle 고객 포털로 보낸다. `tab`을 주면 이 탭 대신 그 탭에서 연다(실패하면 닫는다). 실패하면 false. */
+export async function openPortal(tab?: Window): Promise<boolean> {
+  const r = await api.post<{ url: string }>('/api/billing/portal')
+  if (r.ok) (tab ?? window).location.href = r.data.url
+  else tab?.close()
+  return r.ok
+}
+
 export async function fetchMe(): Promise<{ user: User | null; features: Features }> {
   const res = await fetch('/api/me')
   if (!res.ok) throw new Error(`status ${res.status}`)
@@ -111,13 +133,15 @@ export async function fetchMe(): Promise<{ user: User | null; features: Features
 export type LoginResult =
   | { kind: 'ok' }
   | { kind: 'mfa'; ticket: string }
-  | { kind: 'invalid' | 'locked' | 'unverified' | 'failed' }
+  | { kind: 'invalid' | 'locked' | 'busy' | 'unverified' | 'failed' }
 
 export async function login(email: string, password: string): Promise<LoginResult> {
   const r = await api.post<{ mfa?: string } | null>('/api/login', { email, password })
   if (r.ok) return r.data?.mfa ? { kind: 'mfa', ticket: r.data.mfa } : { kind: 'ok' }
   if (r.status === 401) return { kind: 'invalid' }
   if (r.status === 429) return { kind: 'locked' }
+  if (r.status === 503 && r.code === 'busy') return { kind: 'busy' }
+  // 비밀번호는 맞고 메일 인증만 남은 계정
   if (r.status === 403) return { kind: 'unverified' }
   return { kind: 'failed' }
 }

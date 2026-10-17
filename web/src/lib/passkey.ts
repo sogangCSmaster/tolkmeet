@@ -40,17 +40,20 @@ type CreateOptions = {
 
 type GetOptions = { challenge: string; rpId: string; userVerification: UserVerificationRequirement; timeout: number }
 
-/** 'cancelled'는 사용자가 OS 창을 닫은 경우(오류로 보이지 않는다). */
-export type PasskeyResult = 'ok' | 'cancelled' | 'failed'
+/**
+ * 'cancelled'는 사용자가 OS 창을 닫은 경우(오류로 보이지 않는다). 'failed'는 패스키가 받아들여지지 않은 경우,
+ * 'limited'는 시도가 너무 많은 경우, 'error'는 네트워크·서버 오류.
+ */
+export type PasskeyResult = 'ok' | 'cancelled' | 'failed' | 'limited' | 'error'
 
 function isCancel(e: unknown): boolean {
   return e instanceof DOMException && (e.name === 'NotAllowedError' || e.name === 'AbortError')
 }
 
-/** 등록 전에 본인 확인이 필요하다(비밀번호가 있는 계정은 비밀번호). 'reauth'·'current'는 그 실패. */
-export async function registerPasskey(password: string): Promise<PasskeyResult | 'reauth' | 'current'> {
+/** 등록 전에 본인 확인이 필요하다(비밀번호가 있는 계정은 비밀번호). 'reauth'·'current'·'locked'·'busy'는 그 실패(서버 오류 코드 그대로). */
+export async function registerPasskey(password: string): Promise<PasskeyResult | 'reauth' | 'current' | 'locked' | 'busy'> {
   const opts = await api.post<CreateOptions>('/api/passkeys/register/options', { password })
-  if (!opts.ok) return opts.code === 'reauth' ? 'reauth' : opts.code === 'current' ? 'current' : 'failed'
+  if (!opts.ok) return (['reauth', 'current', 'locked', 'busy'] as const).find((c) => c === opts.code) ?? 'failed'
   const o = opts.data
   let cred: PublicKeyCredential
   try {
@@ -78,7 +81,7 @@ export async function registerPasskey(password: string): Promise<PasskeyResult |
 
 export async function loginWithPasskey(): Promise<PasskeyResult> {
   const opts = await api.post<GetOptions>('/api/passkeys/login/options')
-  if (!opts.ok) return 'failed'
+  if (!opts.ok) return opts.status === 429 ? 'limited' : 'error'
   let cred: PublicKeyCredential
   try {
     cred = (await navigator.credentials.get({
@@ -98,5 +101,5 @@ export async function loginWithPasskey(): Promise<PasskeyResult> {
       },
     },
   })
-  return done.ok ? 'ok' : 'failed'
+  return done.ok ? 'ok' : done.status === 401 ? 'failed' : 'error'
 }

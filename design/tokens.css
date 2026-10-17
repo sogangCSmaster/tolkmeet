@@ -29,8 +29,8 @@
   --page-bg: #F5F5F7;
   --panel-bg: #FFFFFF;
   --text: #1D1D1F;               /* 흰 배경 16.8:1 */
-  --text-secondary: #6E6E73;     /* 흰 배경 5.0:1, #F5F5F7 위 4.6:1 */
-  --text-tertiary: #6E6E73;      /* 보조 정보도 4.5:1 아래로 내리지 않는다 */
+  --text-secondary: #68686D;     /* 흰 배경 5.5:1, #F5F5F7 위 5.1:1, 회색 면(--fill) 위 4.5:1 */
+  --text-tertiary: #68686D;      /* 보조 정보도 4.5:1 아래로 내리지 않는다 */
   --divider: #E5E5EA;
   --border: #D2D2D7;
   --hover: #ECECF0;
@@ -41,7 +41,7 @@
   --accent: #D4401C;             /* 주요 버튼: 브랜드 주황보다 한 단계 진하게, 흰 글자·아이콘 4.6:1 */
   --accent-hover: #BC3816;
   --accent-text: #C2381A;        /* 링크·텍스트 버튼. 흰 배경 5.4:1 */
-  --ok: #248A3D;
+  --ok: #1E7F35;                 /* 흰 배경 5.1:1, #F5F5F7 위 4.7:1 */
   /* 진한 면(보조 강조 버튼·선택된 목록·최신 대화로 알약): 밝은 화면에서는 잉크, 어두운 화면에서는 흰색 */
   --ink: #1D1D1F;
   --on-ink: #FFFFFF;

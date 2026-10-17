@@ -2,6 +2,7 @@
 import type { Dict } from '../i18n/en'
 import Base from '../layouts/Base.astro'
 import { GITHUB_URL, legalLinks, LOCALES, SIGN_IN_URL, SIGNUP_URL, SITE_URL } from '../site'
+import Business from './Business.astro'
 import Face from './Face.astro'
 import Gemini from './Gemini.astro'
 import Mark from './Mark.astro'
@@ -337,6 +338,7 @@ const jsonLd = [
       </div>
     </div>
     <p class="wrap foot-note">{t.footerDisclaimer}</p>
+    <Business dict={t} class="wrap foot-biz" />
   </footer>
 
   <script is:inline>

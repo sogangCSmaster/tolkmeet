@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { logout, useAuth, userName } from '../lib/auth'
 import { useI18n } from '../lib/i18n'
-import { navigate, usePath } from '../lib/router'
+import { authPath, navigate, usePath } from '../lib/router'
 import { BrandMark } from './BrandMark'
 import { Icon } from './Icon'
 import { LocaleSelect } from './LocaleSelect'
@@ -53,12 +53,12 @@ export function Header() {
       <div className="header-actions">
         <LocaleSelect />
         {auth.status === 'guest' && path !== '/login' && (
-          <button className="btn btn-quiet" onClick={() => navigate('/login')}>
+          <button className="btn btn-quiet" onClick={() => navigate(authPath('/login'))}>
             {t('auth.hostLogin')}
           </button>
         )}
         {auth.status === 'guest' && path !== '/signup' && (
-          <button className="btn btn-primary btn-sm header-signup" onClick={() => navigate('/signup')}>
+          <button className="btn btn-primary btn-sm header-signup" onClick={() => navigate(authPath('/signup'))}>
             {t('auth.createAccount')}
           </button>
         )}
@@ -124,6 +124,17 @@ function AccountMenu({ name, email }: { name: string; email: string }) {
             {name}
             <small>{email}</small>
           </p>
+          {/* 휴대폰에서는 머리글 메뉴(.app-nav)를 숨기므로 회의 목록도 여기서 갈 수 있게 한다. */}
+          <button
+            className="account-item"
+            onClick={() => {
+              setOpen(false)
+              navigate('/meetings')
+            }}
+          >
+            <Icon name="calendar_month" />
+            {t('nav.meetings')}
+          </button>
           <button
             className="account-item"
             onClick={() => {

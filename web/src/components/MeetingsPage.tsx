@@ -1,13 +1,12 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react'
 import { api, createRoom, type Meeting } from '../lib/api'
-import { useAuth } from '../lib/auth'
-import { formatDate, formatDuration, formatTime, timeIn } from '../lib/format'
+import { formatDate, formatDuration, formatTime, timeIn, zoneName } from '../lib/format'
 import { useI18n, type MessageKey } from '../lib/i18n'
 import '../lib/i18nPages'
 import { LANGUAGES, languageName } from '../lib/languages'
 import { inviteText, meetingPath, meetingUrl } from '../lib/meetings'
 import { loadPrefs } from '../lib/prefs'
-import { navigate } from '../lib/router'
+import { navigate, useHostOnly } from '../lib/router'
 import { Header } from './Header'
 import { Icon } from './Icon'
 import { useModalDialog } from '../lib/modal'
@@ -24,38 +23,84 @@ async function copy(text: string): Promise<boolean> {
   }
 }
 
-function useMeetings(): [{ upcoming: Meeting[]; past: Meeting[] } | null, () => void] {
-  const [data, setData] = useState<{ upcoming: Meeting[]; past: Meeting[] } | null>(null)
+type Lists = { upcoming: Meeting[]; past: Meeting[]; pastMore?: boolean }
+
+/** 지난 회의는 서버가 이만큼씩 나눠 준다(오래된 기록도 찾아 지울 수 있게). */
+const PAST_PAGE = 50
+const listUrl = (page: number) => (page ? `/api/meetings?pastOffset=${page * PAST_PAGE}` : '/api/meetings')
+
+/** 목록과 받기 실패 여부. 다시 받는 동안에도 받아 둔 목록은 그대로 보인다. */
+function useMeetings() {
+  const [data, setData] = useState<Lists | null>(null)
+  const [failed, setFailed] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [n, setN] = useState(0)
+  /** 펼친 지난 회의 쪽 수 */
+  const pages = useRef(1)
   useEffect(() => {
     let alive = true
-    void api.get<{ upcoming: Meeting[]; past: Meeting[] }>('/api/meetings').then((r) => alive && r.ok && setData(r.data))
+    // 다시 받을 때는 펼쳐 둔 쪽까지 함께(병렬로) 받는다(지운 뒤에도 보던 자리가 남게).
+    void Promise.all(Array.from({ length: pages.current }, (_, i) => api.get<Lists>(listUrl(i)))).then((rs) => {
+      if (!alive) return
+      if (!rs.every((r) => r.ok)) return setFailed(true)
+      const lists = rs.map((r) => (r as { data: Lists }).data)
+      setFailed(false)
+      setData({ upcoming: lists[0].upcoming, past: lists.flatMap((l) => l.past), pastMore: lists[lists.length - 1].pastMore })
+    })
     return () => {
       alive = false
     }
   }, [n])
-  return [data, () => setN((x) => x + 1)]
+
+  async function loadMore(): Promise<boolean> {
+    if (loadingMore) return true
+    setLoadingMore(true)
+    const r = await api.get<Lists>(listUrl(pages.current))
+    setLoadingMore(false)
+    if (!r.ok) return false
+    pages.current++
+    // 그사이 끝난 회의가 생기면 쪽이 밀려 같은 회의가 다시 올 수 있다.
+    setData((d) => d && { ...d, past: [...d.past, ...r.data.past.filter((m) => !d.past.some((p) => p.id === m.id))], pastMore: r.data.pastMore })
+    return true
+  }
+
+  return { data, failed, reload: () => setN((x) => x + 1), loadMore, loadingMore }
 }
 
-export function MeetingsPage() {
-  const { t, locale } = useI18n()
-  const auth = useAuth()
-  const [data, reload] = useMeetings()
-  const [tab, setTab] = useState<'upcoming' | 'past'>('upcoming')
-  const [editing, setEditing] = useState<Meeting | 'new' | null>(null)
-  const [done, setDone] = useState<Meeting | null>(null)
-  const [toast, setToast] = useState<MessageKey | null>(null)
-  const [error, setError] = useState<MessageKey | null>(null)
-  const [starting, setStarting] = useState(false)
+type ToastState = { key: MessageKey; ok: boolean } | null
 
-  useEffect(() => {
-    if (auth.status === 'guest') navigate('/login')
-  }, [auth.status])
+/** 잠깐 떴다 사라지는 알림. 대화상자 안에서 띄우면 그 안(맨 위 층)에 그려 배경에 가리지 않는다. */
+function useToast(): [ToastState, (copied: boolean, ok: MessageKey) => void] {
+  const [toast, setToast] = useState<ToastState>(null)
   useEffect(() => {
     if (!toast) return
     const id = setTimeout(() => setToast(null), 2500)
     return () => clearTimeout(id)
   }, [toast])
+  return [toast, (copied, ok) => setToast(copied ? { key: ok, ok: true } : { key: 'meetings.copyFailed', ok: false })]
+}
+
+function Toast({ toast }: { toast: ToastState }) {
+  const { t } = useI18n()
+  if (!toast) return null
+  return (
+    <div className="toast light" role={toast.ok ? 'status' : 'alert'}>
+      <Icon name={toast.ok ? 'check_circle' : 'info'} />
+      {t(toast.key)}
+    </div>
+  )
+}
+
+export function MeetingsPage() {
+  const { t, locale } = useI18n()
+  useHostOnly('/login')
+  const { data, failed, reload, loadMore, loadingMore } = useMeetings()
+  const [tab, setTab] = useState<'upcoming' | 'past'>('upcoming')
+  const [editing, setEditing] = useState<Meeting | 'new' | null>(null)
+  const [done, setDone] = useState<Meeting | null>(null)
+  const [toast, showCopied] = useToast()
+  const [error, setError] = useState<MessageKey | null>(null)
+  const [starting, setStarting] = useState(false)
 
   async function startNow() {
     setStarting(true)
@@ -67,7 +112,7 @@ export function MeetingsPage() {
   }
 
   async function copyLink(m: Meeting) {
-    setToast((await copy(meetingUrl(m))) ? 'room.linkCopied' : 'account.failed')
+    showCopied(await copy(meetingUrl(m)), 'room.linkCopied')
   }
 
   /** `past`: 지난 회의 탭에서 지우면 '기록 삭제' 문구로 확인한다. */
@@ -111,7 +156,17 @@ export function MeetingsPage() {
             {t('meetings.past')}
           </button>
         </div>
-        <div className="table-card" role="tabpanel">
+        <div className="table-card" role="tabpanel" aria-busy={!data && !failed}>
+          {failed ? (
+            <div className="card-empty" role="alert">
+              <p>{t('home.meetingsFailed')}</p>
+              <button className="btn btn-sm btn-outline" onClick={reload}>
+                {t('room.retry')}
+              </button>
+            </div>
+          ) : (
+            !data && <p className="card-empty loading">{t('meetings.loading')}</p>
+          )}
           {data && list.length === 0 && <p className="card-empty">{t(tab === 'upcoming' ? 'meetings.noUpcoming' : 'meetings.noPast')}</p>}
           {list.length > 0 && (
             <table className="meetings-table">
@@ -145,24 +200,27 @@ export function MeetingsPage() {
                         </>
                       ) : (
                         <>
-                          <td className="hide-sm">{formatDuration(m.lengthSec, t)}</td>
-                          <td className="hide-sm">{m.peak ? t('meetings.peopleCount', { n: String(m.peak) }) : '—'}</td>
-                          <td className="hide-sm">{formatDuration(m.translatedSec, t)}</td>
+                          <td className="hide-sm num">{formatDuration(m.lengthSec, t)}</td>
+                          <td className="hide-sm num">{m.peak ? t('meetings.peopleCount', { n: String(m.peak) }) : '—'}</td>
+                          <td className="hide-sm num">{formatDuration(m.translatedSec, t)}</td>
                         </>
                       )}
                       <td className="actions">
                         {tab === 'upcoming' && (
                           <>
-                            <button className="btn btn-sm btn-outline hide-sm" onClick={() => void copyLink(m)}>
-                              {t('meetings.copyLink')}
-                            </button>
+                            {/* 자막 화면·대면 대화는 주최자 기기에서만 열려 손님이 들어올 수 없으므로 초대할 링크가 없다. */}
+                            {m.kind === 'meeting' && (
+                              <button className="btn btn-sm btn-outline hide-sm" onClick={() => void copyLink(m)}>
+                                {t('meetings.copyLink')}
+                              </button>
+                            )}
                             <RowMenu
                               items={[
                                 [t('meetings.open'), () => navigate(meetingPath(m))],
                                 // 좁은 화면에서는 줄의 링크 복사 버튼을 숨기므로 메뉴에서도 할 수 있게 한다.
-                                [t('meetings.copyLink'), () => void copyLink(m)],
+                                ...(m.kind === 'meeting' ? ([[t('meetings.copyLink'), () => void copyLink(m)]] as MenuItem[]) : []),
                                 [t('meetings.edit'), () => setEditing(m)],
-                                [t('meetings.inviteInfo'), () => setDone(m)],
+                                ...(m.kind === 'meeting' ? ([[t('meetings.inviteInfo'), () => setDone(m)]] as MenuItem[]) : []),
                                 [t('meetings.addToCalendar'), () => (location.href = `/api/meetings/${m.id}/ics`)],
                                 [t('meetings.delete'), () => void remove(m, false), true],
                               ]}
@@ -179,6 +237,20 @@ export function MeetingsPage() {
               </tbody>
             </table>
           )}
+          {tab === 'past' && data?.pastMore && (
+            <div className="table-more">
+              <button
+                className="btn btn-sm btn-outline"
+                disabled={loadingMore}
+                onClick={() => {
+                  setError(null)
+                  void loadMore().then((ok) => ok || setError('home.meetingsFailed'))
+                }}
+              >
+                {t('meetings.loadMore')}
+              </button>
+            </div>
+          )}
         </div>
         <p className="page-foot">{t('meetings.privacy')}</p>
       </main>
@@ -193,21 +265,29 @@ export function MeetingsPage() {
           }}
         />
       )}
-      {done && <ScheduledDialog meeting={done} onClose={() => setDone(null)} onToast={setToast} />}
-      {toast && (
-        <div className="toast light" role="status">
-          <Icon name="check_circle" />
-          {t(toast)}
-        </div>
-      )}
+      {done && <ScheduledDialog meeting={done} onClose={() => setDone(null)} />}
+      <Toast toast={toast} />
     </div>
   )
 }
 
+/** [이름, 할 일, 위험한 일인지] */
+type MenuItem = [string, () => void, boolean?]
+
 /** "…" 메뉴 */
-function RowMenu({ items, label }: { items: [string, () => void, boolean?][]; label: string }) {
+function RowMenu({ items, label }: { items: MenuItem[]; label: string }) {
   const [open, setOpen] = useState(false)
+  const [up, setUp] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  // 화면 아래쪽 줄이면 위로 펼친다(아래로 펼치면 화면 밖으로 나간다).
+  useLayoutEffect(() => {
+    if (!open || !buttonRef.current || !menuRef.current) return
+    const rect = buttonRef.current.getBoundingClientRect()
+    const below = innerHeight - rect.bottom
+    setUp(below < menuRef.current.offsetHeight + 16 && rect.top > below)
+  }, [open])
   useEffect(() => {
     if (!open) return
     const close = (e: PointerEvent) => !ref.current?.contains(e.target as Node) && setOpen(false)
@@ -221,16 +301,18 @@ function RowMenu({ items, label }: { items: [string, () => void, boolean?][]; la
   }, [open])
   return (
     <div className="row-menu" ref={ref}>
-      <button className="icon-btn" aria-label={label} aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+      <button ref={buttonRef} className="icon-btn" aria-label={label} aria-expanded={open} onClick={() => setOpen((o) => !o)}>
         <Icon name="more_horiz" />
       </button>
       {open && (
-        <div className="account-menu">
+        <div ref={menuRef} className={`account-menu${up ? ' up' : ''}`}>
           {items.map(([text, fn, danger]) => (
             <button
               key={text}
               className={`account-item${danger ? ' danger' : ''}`}
               onClick={() => {
+                // 누른 항목은 메뉴와 함께 사라지므로 포커스를 "…" 버튼에 먼저 옮긴다(열린 대화상자가 닫히면 여기로 돌아온다).
+                buttonRef.current?.focus()
                 setOpen(false)
                 fn()
               }}
@@ -290,6 +372,7 @@ function ScheduleDialog({ meeting, onClose, onSaved }: { meeting: Meeting | null
       : Math.floor(new Date(`${date}T${time}`).getTime() / 1000)
   const valid = Number.isFinite(startsAt)
   const myZone = Intl.DateTimeFormat().resolvedOptions().timeZone
+  const joinable = kind === 'meeting'
 
   async function save(e: FormEvent) {
     e.preventDefault()
@@ -297,13 +380,14 @@ function ScheduleDialog({ meeting, onClose, onSaved }: { meeting: Meeting | null
     if (!valid) return setError('meetings.badTime')
     setBusy(true)
     setError(null)
-    const list = guests.split(/[,\s;]+/).map((g) => g.trim()).filter(Boolean)
+    // 자막 화면·대면 대화는 주최자 기기에서만 열리므로 손님을 받지 않는다(서버도 거절한다).
+    const list = joinable ? guests.split(/[,\s;]+/).map((g) => g.trim()).filter(Boolean) : []
     const body = { title: title.trim(), kind, startsAt, durationMin: Number(duration), langA, langB, guests: list, invite: sendMail && list.length > 0 }
     const r = meeting ? await api.patch<Meeting>(`/api/meetings/${meeting.id}`, body) : await api.post<Meeting>('/api/meetings', body)
     setBusy(false)
     if (r.ok) {
       // 저장하면서 초대 글을 바로 클립보드에(바로 붙여 넣을 수 있게).
-      void copy(inviteText(r.data, t, locale))
+      if (joinable) void copy(inviteText(r.data, t, locale))
       return onSaved(r.data)
     }
     if (r.status === 402) return navigate('/checkout')
@@ -335,7 +419,8 @@ function ScheduleDialog({ meeting, onClose, onSaved }: { meeting: Meeting | null
               .join(' · ')}
           </p>
         )}
-        <label className="field-label">
+        {/* label로 감싸면 항목을 누른 클릭이 첫 버튼(목록 열기)으로 전달돼 목록이 다시 열린다. */}
+        <div className="field-label">
           {t('meetings.duration')}
           <Select
             ariaLabel={t('meetings.duration')}
@@ -343,7 +428,7 @@ function ScheduleDialog({ meeting, onClose, onSaved }: { meeting: Meeting | null
             options={['30', '45', '60', '90', '120'].map((v) => ({ value: v, label: formatDuration(Number(v) * 60, t) }))}
             onChange={setDuration}
           />
-        </label>
+        </div>
         <div className="field-label">
           {t('meetings.kind')}
           <div className="segmented" role="radiogroup" aria-label={t('meetings.kind')}>
@@ -364,14 +449,20 @@ function ScheduleDialog({ meeting, onClose, onSaved }: { meeting: Meeting | null
           <Select label={t('lang.mine')} ariaLabel={t('lang.mine')} value={langA} options={LANG_OPTIONS} onChange={setLangA} />
           <Select label={t('lang.partner')} ariaLabel={t('lang.partner')} value={langB} options={LANG_OPTIONS} onChange={setLangB} />
         </div>
-        <label className="field-label">
-          {t('meetings.guests')}
-          <input className="input" value={guests} onChange={(e) => setGuests(e.target.value)} placeholder={t('meetings.guestsPlaceholder')} autoComplete="off" />
-        </label>
-        <label className="check-row">
-          <input type="checkbox" checked={sendMail} onChange={(e) => setSendMail(e.target.checked)} />
-          {t('meetings.sendMail')}
-        </label>
+        {joinable ? (
+          <>
+            <label className="field-label">
+              {t('meetings.guests')}
+              <input className="input" value={guests} onChange={(e) => setGuests(e.target.value)} placeholder={t('meetings.guestsPlaceholder')} autoComplete="off" />
+            </label>
+            <label className="check-row">
+              <input type="checkbox" checked={sendMail} onChange={(e) => setSendMail(e.target.checked)} />
+              {t('meetings.sendMail')}
+            </label>
+          </>
+        ) : (
+          <p className="form-note">{t('meetings.noGuestsForKind')}</p>
+        )}
         {error && (
           <p className="form-error" role="alert">
             {t(error)}
@@ -382,7 +473,7 @@ function ScheduleDialog({ meeting, onClose, onSaved }: { meeting: Meeting | null
             {t('room.cancel')}
           </button>
           <button className="btn btn-primary" disabled={busy}>
-            {t(meeting ? 'account.save' : 'meetings.scheduleAndCopy')}
+            {t(meeting ? 'account.save' : joinable ? 'meetings.scheduleAndCopy' : 'meetings.schedule')}
           </button>
         </div>
       </form>
@@ -390,12 +481,17 @@ function ScheduleDialog({ meeting, onClose, onSaved }: { meeting: Meeting | null
   )
 }
 
-function ScheduledDialog({ meeting, onClose, onToast }: { meeting: Meeting; onClose: () => void; onToast: (k: MessageKey) => void }) {
+function ScheduledDialog({ meeting, onClose }: { meeting: Meeting; onClose: () => void }) {
   const { t, locale } = useI18n()
+  const [toast, showCopied] = useToast()
   const start = meeting.startsAt ?? 0
   const text = inviteText(meeting, t, locale)
   const myZone = Intl.DateTimeFormat().resolvedOptions().timeZone
   const mail = `mailto:${encodeURIComponent(meeting.guests.join(','))}?subject=${encodeURIComponent(meeting.title)}&body=${encodeURIComponent(text)}`
+  const joinable = meeting.kind === 'meeting'
+  // 초대 메일을 보내라고 했으면 sent가 온다. 받는 사람별 하루 한도에 걸린 주소는 빠지므로 알려 준다.
+  const sent = meeting.sent
+  const missed = sent ? meeting.guests.filter((g) => !sent.includes(g)) : []
   return (
     <Dialog onClose={onClose} labelledBy="done-title">
       <div className="done-head">
@@ -404,11 +500,11 @@ function ScheduledDialog({ meeting, onClose, onToast }: { meeting: Meeting; onCl
         </span>
         <h2 id="done-title">{t('meetings.scheduled')}</h2>
       </div>
-      <p className="lead left">{t('meetings.scheduledLead')}</p>
+      <p className="lead left">{t(joinable ? 'meetings.scheduledLead' : 'meetings.scheduledHostLead')}</p>
       <div className="invite-card">
         <b>{meeting.title}</b>
         <p>
-          {formatDate(start, locale, true)} {formatTime(start, locale)} – {formatTime(start + meeting.durationMin * 60, locale)}
+          {formatDate(start, locale, true)} {formatTime(start, locale)} – {formatTime(start + meeting.durationMin * 60, locale)} ({zoneName(start, locale)})
           <small>
             {ZONES.filter((z) => z !== myZone)
               .slice(0, 2)
@@ -416,37 +512,53 @@ function ScheduledDialog({ meeting, onClose, onToast }: { meeting: Meeting; onCl
               .join(' · ')}
           </small>
         </p>
-        <p>
-          <small>{t('meetings.joinLink')}</small>
-          <a href={meetingUrl(meeting)}>{meetingUrl(meeting).replace(/^https?:\/\//, '')}</a>
-        </p>
+        {joinable && (
+          <p>
+            <small>{t('meetings.joinLink')}</small>
+            <a href={meetingUrl(meeting)}>{meetingUrl(meeting).replace(/^https?:\/\//, '')}</a>
+          </p>
+        )}
         {meeting.langA && meeting.langB && (
           <small>
             {languageName(meeting.langA)} ⇄ {languageName(meeting.langB)} · {t('meetings.browserNote')}
           </small>
         )}
       </div>
-      <button className="btn btn-primary btn-lg wide" onClick={async () => onToast((await copy(text)) ? 'meetings.copied' : 'account.failed')}>
-        <Icon name="content_copy" />
-        {t('meetings.copyInvite')}
-      </button>
-      <div className="three">
-        <button className="btn btn-outline" onClick={async () => onToast((await copy(meetingUrl(meeting))) ? 'room.linkCopied' : 'account.failed')}>
-          {t('meetings.copyLinkOnly')}
-        </button>
-        <a className="btn btn-outline" href={`/api/meetings/${meeting.id}/ics`}>
+      {joinable ? (
+        <>
+          <button className="btn btn-primary btn-lg wide" onClick={async () => showCopied(await copy(text), 'meetings.copied')}>
+            <Icon name="content_copy" />
+            {t('meetings.copyInvite')}
+          </button>
+          <div className="three">
+            <button className="btn btn-outline" onClick={async () => showCopied(await copy(meetingUrl(meeting)), 'room.linkCopied')}>
+              {t('meetings.copyLinkOnly')}
+            </button>
+            <a className="btn btn-outline" href={`/api/meetings/${meeting.id}/ics`}>
+              {t('meetings.addToCalendar')}
+            </a>
+            <a className="btn btn-outline" href={mail}>
+              {t('meetings.sendByMail')}
+            </a>
+          </div>
+        </>
+      ) : (
+        <a className="btn btn-outline btn-lg wide" href={`/api/meetings/${meeting.id}/ics`}>
           {t('meetings.addToCalendar')}
         </a>
-        <a className="btn btn-outline" href={mail}>
-          {t('meetings.sendByMail')}
-        </a>
-      </div>
-      {meeting.sent && meeting.sent.length > 0 && <p className="form-note">{t('meetings.mailedTo', { list: meeting.sent.join(', ') })}</p>}
+      )}
+      {sent && sent.length > 0 && <p className="form-note">{t('meetings.mailedTo', { list: sent.join(', ') })}</p>}
+      {missed.length > 0 && (
+        <p className="form-error" role="alert">
+          {t('meetings.notSent', { list: missed.join(', ') })}
+        </p>
+      )}
       <div className="sheet-actions">
         <button className="btn btn-quiet" onClick={onClose}>
           {t('meetings.done')}
         </button>
       </div>
+      <Toast toast={toast} />
     </Dialog>
   )
 }

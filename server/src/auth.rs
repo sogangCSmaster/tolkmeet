@@ -15,14 +15,27 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use crate::db::{Db, OptionalExtension, now_secs, params};
 
 pub const COOKIE_NAME: &str = "tolkmeet_session";
+/// 사용자 한 명이 동시에 가질 수 있는 로그인 세션 수
+const MAX_SESSIONS: i64 = 50;
 /// 로그인 유지 기간. 쿠키와 DB 세션이 같은 기간을 쓴다.
 const SESSION_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 /// (클라이언트 IP, 아이디)별로 이 시간 안에 이만큼 실패하면 시간이 지날 때까지 로그인을 막는다.
 /// IP별로 세므로 아이디를 아는 공격자가 다른 곳의 주최자를 잠글 수 없다.
 const MAX_FAILURES: u32 = 10;
 /// 여러 IP에 나눠 시도하는 공격을 막는 아이디별 상한. 정상 사용자가 닿지 않도록 넉넉하게 둔다.
+/// 이 상한에 걸려도 최근 같은 클라이언트에서 그 계정으로 로그인에 성공한 적이 있으면 막지 않는다
+/// (아이디만 아는 사람이 여러 곳에서 틀려 주인의 로그인을 막지 못하게).
 const MAX_USER_FAILURES: u32 = 100;
+/// 로그인에 성공한 (클라이언트, 아이디)를 기억하는 기간
+const KNOWN_CLIENT_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+/// 계정마다 기억하는 최근 로그인 위치 수. 자기 계정으로 아무리 많은 곳에서 들어와도
+/// 다른 계정의 기억을 밀어내지 못하게 계정마다 따로 센다.
+const KNOWN_CLIENTS_PER_USER: usize = 8;
 const FAILURE_WINDOW: Duration = Duration::from_secs(15 * 60);
+/// 한 클라이언트(/64)·한 망(/48)이 여러 아이디에 걸쳐 틀릴 수 있는 횟수(같은 창 안).
+const MAX_IP_FAILURES: u32 = 60;
+/// 망(/48)은 통신사·회사에서 모르는 사람 수천 명이 나눠 쓸 수 있어 넉넉하게 둔다(/64를 바꿔 가며 뿌리기만 막는다).
+const MAX_NET_FAILURES: u32 = 2000;
 /// 실패 기록 맵의 최대 크기. 없는 아이디도 기록하므로 무한히 커지지 않게 막는다.
 const MAX_TRACKED: usize = 10_000;
 /// 동시에 돌리는 argon2 검증 수. 로그인 요청으로 CPU를 다 쓰게 만들 수 없게 한다.
@@ -34,6 +47,8 @@ const MAX_PASSWORD_BYTES: usize = 1024;
 pub enum LoginError {
     Invalid,
     Locked,
+    /// 비밀번호 확인이 몰려 잠시 처리할 수 없다(다시 시도하면 된다)
+    Busy,
     /// 비밀번호는 맞지만 이메일 인증 전
     Unverified,
     /// 비밀번호는 맞고 2차 인증 코드가 필요하다(티켓으로 이어서 확인)
@@ -68,6 +83,9 @@ struct Limiter<K> {
     max: u32,
     cap: usize,
     map: HashMap<K, Attempts>,
+    /// 성공하면 실패 기록을 지운다(계정·(클라이언트, 계정) 단위). 클라이언트 단위는 지우지 않는다:
+    /// 자기 계정으로 한 번 맞게 들어와 기록을 지우고 다른 계정을 계속 맞혀 보지 못하게.
+    forgive_on_success: bool,
 }
 
 impl<K: Eq + Hash + Clone> Limiter<K> {
@@ -76,6 +94,14 @@ impl<K: Eq + Hash + Clone> Limiter<K> {
             max,
             cap,
             map: HashMap::new(),
+            forgive_on_success: true,
+        }
+    }
+
+    fn strict(max: u32, cap: usize) -> Self {
+        Self {
+            forgive_on_success: false,
+            ..Self::new(max, cap)
         }
     }
 
@@ -104,7 +130,11 @@ impl<K: Eq + Hash + Clone> Limiter<K> {
             return;
         };
         a.in_flight = a.in_flight.saturating_sub(1);
-        a.count = if failed { a.count + 1 } else { 0 };
+        if failed {
+            a.count += 1;
+        } else if self.forgive_on_success {
+            a.count = 0;
+        }
         if a.count == 0 && a.in_flight == 0 {
             self.map.remove(key);
         }
@@ -138,6 +168,13 @@ impl<K: Eq + Hash + Clone> Limiter<K> {
 struct Throttle {
     by_client: Limiter<(IpAddr, String)>,
     by_user: Limiter<String>,
+    /// 아이디를 바꿔 가며 틀리는 것(비밀번호 뿌리기·검증 슬롯 독차지): 클라이언트(/64)와 망(/48) 단위.
+    /// 검증 중인 시도도 세므로 동시에 몰아 보내도 한도를 넘지 못한다.
+    by_ip: Limiter<IpAddr>,
+    by_net: Limiter<IpAddr>,
+    /// 아이디 → 최근 로그인에 성공한 클라이언트(인증된 계정만). 아이디별 상한을 넘어도 이 곳의 주인은 들어올 수 있다.
+    known: HashMap<String, Vec<(IpAddr, Instant)>>,
+    cap: usize,
 }
 
 impl Throttle {
@@ -145,30 +182,80 @@ impl Throttle {
         Self {
             by_client: Limiter::new(MAX_FAILURES, cap),
             by_user: Limiter::new(MAX_USER_FAILURES, cap),
+            by_ip: Limiter::strict(MAX_IP_FAILURES, cap),
+            by_net: Limiter::strict(MAX_NET_FAILURES, cap),
+            known: HashMap::new(),
+            cap,
         }
     }
 
-    fn try_reserve(&mut self, client: IpAddr, username: &str, now: Instant) -> bool {
+    fn is_known(&self, client: IpAddr, username: &str, now: Instant) -> bool {
+        self.known.get(username).is_some_and(|list| {
+            list.iter().any(|(ip, at)| *ip == client && now.duration_since(*at) < KNOWN_CLIENT_TTL)
+        })
+    }
+
+    /// 인증된 계정에 로그인한 곳을 기억한다.
+    fn remember(&mut self, client: IpAddr, username: &str, now: Instant) {
+        if !self.known.contains_key(username) && self.known.len() >= self.cap {
+            self.known
+                .retain(|_, list| list.iter().any(|(_, at)| now.duration_since(*at) < KNOWN_CLIENT_TTL));
+            // 그래도 가득하면 가장 오래 들어오지 않은 계정의 기억을 버린다. 계정마다 한 칸이라
+            // 남의 기억을 밀어내려면 인증된 계정이 그만큼 있어야 한다.
+            if self.known.len() >= self.cap
+                && let Some(oldest) = self
+                    .known
+                    .iter()
+                    .min_by_key(|(_, list)| list.iter().map(|(_, at)| *at).max())
+                    .map(|(k, _)| k.clone())
+            {
+                self.known.remove(&oldest);
+            }
+        }
+        let list = self.known.entry(username.to_owned()).or_default();
+        list.retain(|(ip, at)| *ip != client && now.duration_since(*at) < KNOWN_CLIENT_TTL);
+        list.push((client, now));
+        if list.len() > KNOWN_CLIENTS_PER_USER {
+            list.remove(0);
+        }
+    }
+
+    fn try_reserve(&mut self, client: IpAddr, username: &str, now: Instant) -> Result<(), LoginError> {
         let client_key = (client, username.to_owned());
-        if self.by_client.is_full(&client_key, now)
-            || self.by_user.is_full(&username.to_owned(), now)
-        {
-            return false;
+        let net = net_key(client);
+        let user_full = self.by_user.is_full(&username.to_owned(), now) && !self.is_known(client, username, now);
+        if self.by_client.is_full(&client_key, now) || user_full || self.by_ip.is_full(&client, now) {
+            return Err(LoginError::Locked);
+        }
+        // 망 단위는 이웃(같은 통신사·회사의 다른 /64)이 채웠을 수 있다. 이 사람이 틀린 게 아니므로
+        // "너무 많이 틀렸다"가 아니라 "잠시 뒤 다시"로 답한다.
+        if self.by_net.is_full(&net, now) {
+            return Err(LoginError::Busy);
         }
         self.by_client.reserve(client_key, now);
         self.by_user.reserve(username.to_owned(), now);
-        true
+        self.by_ip.reserve(client, now);
+        self.by_net.reserve(net, now);
+        Ok(())
     }
 
     fn finish(&mut self, client: IpAddr, username: &str, failed: bool) {
         self.by_client
             .finish(&(client, username.to_owned()), failed);
         self.by_user.finish(&username.to_owned(), failed);
+        self.by_ip.finish(&client, failed);
+        self.by_net.finish(&net_key(client), failed);
     }
 
     fn sweep(&mut self, now: Instant) {
         self.by_client.sweep(now);
         self.by_user.sweep(now);
+        self.by_ip.sweep(now);
+        self.by_net.sweep(now);
+        self.known.retain(|_, list| {
+            list.retain(|(_, at)| now.duration_since(*at) < KNOWN_CLIENT_TTL);
+            !list.is_empty()
+        });
     }
 }
 
@@ -194,13 +281,16 @@ pub struct Auth {
     db: Db,
     /// 유효한 세션의 메모리 사본(토큰 해시 → 세션). 회의 입장·WebSocket 확인은 DB를 읽지 않는다.
     sessions: Mutex<HashMap<String, Session>>,
-    /// 비밀번호까지 맞고 2차 인증을 기다리는 로그인(티켓 → 사용자, 만료).
-    mfa_tickets: Mutex<HashMap<String, (i64, Instant, u32)>>,
+    /// 비밀번호까지 맞고 2차 인증을 기다리는 로그인.
+    /// 티켓 → (사용자, 만든 때, 코드 시도 수, 비밀번호로 로그인한 곳). 2차 인증까지 끝나야 그곳을 기억한다.
+    mfa_tickets: Mutex<HashMap<String, MfaTicket>>,
     throttle: Mutex<Throttle>,
     verify_slots: Arc<Semaphore>,
     /// 없는 계정도 같은 시간이 걸리도록 비교에 쓰는 해시(계정 존재 여부를 응답 시간으로 알 수 없게).
     dummy_hash: String,
 }
+
+type MfaTicket = (i64, Instant, u32, Option<(IpAddr, String)>);
 
 /// 2차 인증 티켓은 비밀번호를 맞힌 직후 5분 안에만 쓸 수 있다.
 const MFA_TICKET_TTL: Duration = Duration::from_secs(5 * 60);
@@ -255,27 +345,30 @@ impl Auth {
         username: &str,
         password: &str,
     ) -> Result<String, LoginError> {
+        self.login_with_agent(client, username, password, "").await
+    }
+
+    /// `login`과 같고, 새 세션에 브라우저 정보(로그인된 기기 목록에 보일 이름)를 남긴다.
+    pub async fn login_with_agent(
+        &self,
+        client: IpAddr,
+        username: &str,
+        password: &str,
+        user_agent: &str,
+    ) -> Result<String, LoginError> {
         let username = &normalize_username(username);
         // 형식에 맞지 않는 아이디는 어떤 계정과도 일치할 수 없다(형식은 공개 정보).
         // 해싱도 기록도 하지 않아 큰 키가 기록 맵에 쌓이지 않는다.
         if !is_valid_username(username) {
             return Err(LoginError::Invalid);
         }
-        // 대기열도 제한한다. 검증 슬롯이 없으면 시도 기록을 소비하지 않고 재시도를 요청한다.
-        let permit = self
-            .verify_slots
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| LoginError::Locked)?;
         let client = client_key(client);
-        if !self
-            .throttle
+        // 검증 슬롯이 잠깐 비지 않으면 시도 기록을 소비하지 않고 "잠시 뒤 다시"를 알린다.
+        let permit = self.acquire_slot().await?;
+        self.throttle
             .lock()
             .unwrap()
-            .try_reserve(client, username, Instant::now())
-        {
-            return Err(LoginError::Locked);
-        }
+            .try_reserve(client, username, Instant::now())?;
         let mut reservation = Reservation {
             throttle: &self.throttle,
             client,
@@ -292,10 +385,24 @@ impl Auth {
         if !user.verified {
             return Err(LoginError::Unverified);
         }
+        // 로그인을 다 마친 곳만 주인이 들어오는 곳으로 기억한다. 인증 전 계정은 아무나 만들 수 있으므로 세지 않고,
+        // 2차 인증 계정은 코드까지 맞힌 뒤에 기억한다(비밀번호만 아는 사람이 주인의 기억을 밀어내지 못하게).
         if user.totp {
-            return Err(LoginError::MfaRequired(self.new_mfa_ticket(user.id)));
+            let origin = Some((client, username.to_owned()));
+            return Err(LoginError::MfaRequired(self.new_mfa_ticket_from(user.id, origin)));
         }
-        Ok(self.create_session(user.id, "").await)
+        self.throttle.lock().unwrap().remember(client, username, Instant::now());
+        // 세션을 저장하지 못했으면(일시적인 DB 오류) 잠시 뒤 다시 시도하게 한다.
+        self.create_session(user.id, user_agent).await.ok_or(LoginError::Busy)
+    }
+
+    /// 비밀번호 확인 슬롯을 잡는다. 몰렸을 때 바로 거절하지 않고 잠깐 기다린다.
+    async fn acquire_slot(&self) -> Result<OwnedSemaphorePermit, LoginError> {
+        tokio::time::timeout(Duration::from_secs(2), self.verify_slots.clone().acquire_owned())
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .ok_or(LoginError::Busy)
     }
 
     /// 계정 조회와 비밀번호 비교를 한 블로킹 작업에서 한다. 요청이 취소돼도 작업이 슬롯을 끝까지 쥔다.
@@ -316,19 +423,33 @@ impl Auth {
             let _permit = permit;
             let account = db
                 .blocking(|c| {
-                    c.query_row(
-                        "SELECT id, password_hash, email_verified, totp_enabled FROM users WHERE email = ?1",
-                        params![email],
-                        |r| {
-                            Ok(LoginAccount {
-                                id: r.get(0)?,
-                                hash: r.get(1)?,
-                                verified: r.get::<_, i64>(2)? != 0,
-                                totp: r.get::<_, i64>(3)? != 0,
-                            })
-                        },
-                    )
-                    .optional()
+                    let account = c
+                        .query_row(
+                            "SELECT id, password_hash, email_verified, totp_enabled FROM users WHERE email = ?1",
+                            params![email],
+                            |r| {
+                                Ok(LoginAccount {
+                                    id: r.get(0)?,
+                                    hash: r.get(1)?,
+                                    verified: r.get::<_, i64>(2)? != 0,
+                                    totp: r.get::<_, i64>(3)? != 0,
+                                })
+                            },
+                        )
+                        .optional()?;
+                    // 인증 전 가입은 비밀번호가 아직 계정이 아니라 마지막 인증 코드에 있다. 맞으면 "인증 필요"를 알리려고 그것과 비교한다.
+                    let Some(mut a) = account else { return Ok(None) };
+                    if !a.verified && a.hash.is_none() {
+                        let payload: Option<Option<String>> = c
+                            .query_row(
+                                "SELECT payload FROM email_codes WHERE user_id = ?1 AND kind = 'verify' ORDER BY id DESC LIMIT 1",
+                                params![a.id],
+                                |r| r.get(0),
+                            )
+                            .optional()?;
+                        a.hash = payload.flatten().and_then(|p| SignupPayload::decode(&p)).map(|p| p.hash);
+                    }
+                    Ok(Some(a))
                 })
                 .ok()
                 .flatten();
@@ -349,11 +470,9 @@ impl Auth {
             .call(move |c| c.query_row("SELECT email FROM users WHERE id = ?1", params![user_id], |r| r.get::<_, String>(0)))
             .await
             .map_err(|_| LoginError::Invalid)?;
-        let permit = self.verify_slots.clone().try_acquire_owned().map_err(|_| LoginError::Locked)?;
+        let permit = self.acquire_slot().await?;
         let client = client_key(client);
-        if !self.throttle.lock().unwrap().try_reserve(client, &email, Instant::now()) {
-            return Err(LoginError::Locked);
-        }
+        self.throttle.lock().unwrap().try_reserve(client, &email, Instant::now())?;
         let mut reservation = Reservation { throttle: &self.throttle, client, username: &email, succeeded: false };
         if self.verify(&email, password, permit).await.is_none() {
             return Err(LoginError::Invalid);
@@ -363,11 +482,15 @@ impl Auth {
     }
 
     pub fn new_mfa_ticket(&self, user_id: i64) -> String {
+        self.new_mfa_ticket_from(user_id, None)
+    }
+
+    fn new_mfa_ticket_from(&self, user_id: i64, origin: Option<(IpAddr, String)>) -> String {
         let ticket = new_token();
         let mut tickets = self.mfa_tickets.lock().unwrap();
         let now = Instant::now();
-        tickets.retain(|_, (_, at, _)| now.duration_since(*at) < MFA_TICKET_TTL);
-        tickets.insert(ticket.clone(), (user_id, now, 0));
+        tickets.retain(|_, (_, at, _, _)| now.duration_since(*at) < MFA_TICKET_TTL);
+        tickets.insert(ticket.clone(), (user_id, now, 0, origin));
         ticket
     }
 
@@ -376,8 +499,8 @@ impl Auth {
         let tickets = self.mfa_tickets.lock().unwrap();
         tickets
             .get(ticket)
-            .filter(|(_, at, _)| at.elapsed() < MFA_TICKET_TTL)
-            .map(|(id, _, _)| *id)
+            .filter(|(_, at, _, _)| at.elapsed() < MFA_TICKET_TTL)
+            .map(|(id, _, _, _)| *id)
     }
 
     /// 티켓 하나에 코드 시도는 5번까지. 넘으면 티켓을 지운다(처음부터 다시 로그인).
@@ -392,36 +515,65 @@ impl Auth {
         true
     }
 
+    /// 이 사용자의 진행 중인 2차 인증 티켓을 모두 버린다(계정을 지울 때).
+    pub fn drop_mfa_tickets(&self, user_id: i64) {
+        self.mfa_tickets.lock().unwrap().retain(|_, (u, _, _, _)| *u != user_id);
+    }
+
+    /// 2차 인증을 통과했다: 티켓을 지우고, 비밀번호로 로그인한 곳을 주인이 들어오는 곳으로 기억한다.
     pub fn take_mfa_ticket(&self, ticket: &str) {
-        self.mfa_tickets.lock().unwrap().remove(ticket);
+        let taken = self.mfa_tickets.lock().unwrap().remove(ticket);
+        if let Some((_, _, _, Some((client, username)))) = taken {
+            self.throttle.lock().unwrap().remember(client, &username, Instant::now());
+        }
     }
 
     /// 새 세션을 만들고 DB와 메모리에 모두 넣는다.
-    pub async fn create_session(&self, user_id: i64, user_agent: &str) -> String {
+    /// 새 세션 토큰. DB에 저장하지 못하면 None(쿠키를 주고도 로그인되지 않는 일이 없게).
+    pub async fn create_session(&self, user_id: i64, user_agent: &str) -> Option<String> {
         let token = new_token();
         let hash = token_hash(&token);
         let now = now_secs();
         let expires = now + SESSION_TTL.as_secs() as i64;
         let ua: String = user_agent.chars().take(200).collect();
         let h = hash.clone();
+        // 사용자마다 최근 MAX_SESSIONS개만 둔다(로그인만 반복해 세션을 끝없이 쌓지 못하게). 넘친 옛 세션은 함께 지운다.
         let saved = self
             .db
             .call(move |c| {
-                c.execute(
+                let tx = c.transaction()?;
+                tx.execute(
                     "INSERT INTO sessions (token_hash, user_id, created_at, expires_at, user_agent) VALUES (?1, ?2, ?3, ?4, ?5)",
                     params![h, user_id, now, expires, ua],
-                )
+                )?;
+                let old: Vec<String> = tx
+                    .prepare(
+                        "SELECT token_hash FROM sessions WHERE user_id = ?1 ORDER BY created_at DESC, rowid DESC LIMIT -1 OFFSET ?2",
+                    )?
+                    .query_map(params![user_id, MAX_SESSIONS], |r| r.get(0))?
+                    .collect::<rusqlite::Result<_>>()?;
+                for h in &old {
+                    tx.execute("DELETE FROM sessions WHERE token_hash = ?1", params![h])?;
+                }
+                tx.commit()?;
+                Ok(old)
             })
             .await;
-        if let Err(e) = saved {
-            // 메모리 세션만으로도 이번 실행 동안은 동작한다. 재시작하면 다시 로그인해야 할 뿐이다.
-            tracing::warn!(error = %e, "could not persist session");
+        // DB에 저장된 세션만 메모리에 둔다. 저장에 실패하면(예: 그사이 계정이 지워짐) 이 토큰은 로그인되지 않는다.
+        match saved {
+            Ok(old) => {
+                let mut sessions = self.sessions.lock().unwrap();
+                for h in old {
+                    sessions.remove(&h);
+                }
+                sessions.insert(hash, Session { user_id, expires });
+                Some(token)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "could not persist session");
+                None
+            }
         }
-        self.sessions
-            .lock()
-            .unwrap()
-            .insert(hash, Session { user_id, expires });
-        token
     }
 
     /// 세션의 사용자 id(문자열). 회의실의 주최자 식별에 쓴다.
@@ -523,7 +675,7 @@ impl Auth {
         self.mfa_tickets
             .lock()
             .unwrap()
-            .retain(|_, (_, at, _)| at.elapsed() < MFA_TICKET_TTL);
+            .retain(|_, (_, at, _, _)| at.elapsed() < MFA_TICKET_TTL);
         self.throttle.lock().unwrap().sweep(Instant::now());
         let db = self.db.clone();
         tokio::spawn(async move {
@@ -531,6 +683,34 @@ impl Auth {
                 .call(move |c| c.execute("DELETE FROM sessions WHERE expires_at <= ?1", params![now]))
                 .await;
         });
+    }
+}
+
+/// 인증 전 가입 정보(인증 코드에 함께 보관). 인증될 때 계정에 넣는다.
+/// 예전 판은 비밀번호 해시 문자열만 담았으므로 그것도 읽는다.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct SignupPayload {
+    pub hash: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub locale: String,
+    /// 예전 판(해시만 담음): 이름·언어를 모르므로 계정의 값을 그대로 둔다.
+    #[serde(skip)]
+    pub legacy: bool,
+}
+
+impl SignupPayload {
+    pub fn encode(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
+
+    pub fn decode(raw: &str) -> Option<Self> {
+        if raw.starts_with('{') {
+            serde_json::from_str(raw).ok()
+        } else {
+            Some(Self { hash: raw.to_owned(), name: String::new(), locale: String::new(), legacy: true })
+        }
     }
 }
 
@@ -608,6 +788,14 @@ pub fn client_key(ip: IpAddr) -> IpAddr {
             Some(v4) => IpAddr::V4(v4),
             None => IpAddr::V6(Ipv6Addr::from_bits(v6.to_bits() & (u128::MAX << 64))),
         },
+        v4 => v4,
+    }
+}
+
+/// 넓은 단위: IPv6는 /48(보통 한 사이트·터널에 주는 크기), IPv4는 그대로.
+pub fn net_key(ip: IpAddr) -> IpAddr {
+    match client_key(ip) {
+        IpAddr::V6(v6) => IpAddr::V6(Ipv6Addr::from_bits(v6.to_bits() & (u128::MAX << 80))),
         v4 => v4,
     }
 }
@@ -723,6 +911,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn session_for_a_deleted_user_is_not_kept() {
+        // 계정을 지우는 사이 끝난 로그인이 세션을 만들려 해도 DB에 없으면 메모리에도 두지 않는다.
+        let auth = Auth::new(HashMap::new());
+        let a = auth
+            .db()
+            .blocking(|c| {
+                c.execute("INSERT INTO users (email, created_at) VALUES ('alice@x.co', 1)", [])?;
+                Ok(c.last_insert_rowid())
+            })
+            .unwrap();
+        auth.db().blocking(move |c| c.execute("DELETE FROM users WHERE id = ?1", params![a])).unwrap();
+        // 저장하지 못한 세션은 토큰도 주지 않는다(쿠키를 받고도 로그인되지 않는 일이 없게).
+        assert_eq!(auth.create_session(a, "").await, None);
+    }
+
+    #[tokio::test]
+    async fn sessions_per_user_are_capped() {
+        let auth = Auth::new(HashMap::new());
+        let uid = auth
+            .db()
+            .blocking(|c| {
+                c.execute("INSERT INTO users (email, created_at) VALUES ('a@x.co', 1)", [])?;
+                Ok(c.last_insert_rowid())
+            })
+            .unwrap();
+        let first = auth.create_session(uid, "").await.unwrap();
+        for _ in 0..MAX_SESSIONS {
+            auth.create_session(uid, "").await.unwrap();
+        }
+        let rows: i64 = auth
+            .db()
+            .blocking(move |c| c.query_row("SELECT count(*) FROM sessions WHERE user_id = ?1", params![uid], |r| r.get(0)))
+            .unwrap();
+        assert_eq!(rows, MAX_SESSIONS);
+        // 가장 오래된 세션은 DB와 메모리에서 함께 빠진다.
+        assert_eq!(auth.session_user_id(&first), None);
+    }
+
+    #[tokio::test]
     async fn login_succeeds_with_correct_password_and_creates_session() {
         let auth = auth_with("host", "correct horse");
         let token = auth.login(IP_A, "host", "correct horse").await.unwrap();
@@ -828,6 +1055,52 @@ mod tests {
         assert!(auth.login(IP_B, "host", "correct horse").await.is_ok());
     }
 
+    #[test]
+    fn logins_to_other_accounts_cannot_push_out_the_owners_known_client() {
+        let mut t = Throttle::new(4);
+        let now = Instant::now();
+        t.remember(IP_B, "host", now);
+        // 한 사람이 자기 계정으로 수많은 곳에서 들어와도 계정마다 따로 세므로 주인의 기억은 남는다.
+        for i in 0..2000u32 {
+            t.remember(IpAddr::V4(Ipv4Addr::from(0x0a00_0000 + i)), "mallory", now);
+        }
+        assert!(t.is_known(IP_B, "host", now));
+        assert_eq!(t.known["mallory"].len(), KNOWN_CLIENTS_PER_USER);
+    }
+
+    #[tokio::test]
+    async fn a_password_without_the_second_factor_does_not_make_a_client_known() {
+        let auth = auth_with("host", "correct horse");
+        auth.db()
+            .blocking(|c| c.execute("UPDATE users SET totp_enabled = 1 WHERE email = 'host'", []))
+            .unwrap();
+        let Err(LoginError::MfaRequired(ticket)) = auth.login(IP_B, "host", "correct horse").await else {
+            panic!("2차 인증을 요구해야 한다");
+        };
+        assert!(!auth.throttle.lock().unwrap().is_known(IP_B, "host", Instant::now()));
+        // 코드까지 맞혀 티켓을 쓰면 그때 기억한다.
+        auth.take_mfa_ticket(&ticket);
+        assert!(auth.throttle.lock().unwrap().is_known(IP_B, "host", Instant::now()));
+    }
+
+    #[tokio::test]
+    async fn spread_failures_cannot_lock_the_owner_out_where_they_logged_in_before() {
+        let auth = auth_with("host", "correct horse");
+        assert!(auth.login(IP_B, "host", "correct horse").await.is_ok());
+        for i in 0..MAX_USER_FAILURES / MAX_FAILURES {
+            let ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, i as u8));
+            for _ in 0..MAX_FAILURES {
+                assert_eq!(auth.login(ip, "host", "wrong").await, Err(LoginError::Invalid));
+            }
+        }
+        // 처음 보는 곳은 상한에 막히고, 전에 들어왔던 곳에서는 들어온다.
+        assert_eq!(
+            auth.login(IP_A, "host", "correct horse").await.unwrap_err(),
+            LoginError::Locked
+        );
+        assert!(auth.login(IP_B, "host", "correct horse").await.is_ok());
+    }
+
     #[tokio::test]
     async fn per_username_ceiling_stops_attempts_spread_across_ips() {
         let auth = auth_with("host", "correct horse");
@@ -847,6 +1120,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn one_client_spraying_many_accounts_is_stopped_but_correct_logins_are_not() {
+        let auth = auth_with("host", "correct horse");
+        // 맞게 들어오는 건 아무리 많아도 세지 않는다(같은 NAT 뒤의 여러 사람).
+        for _ in 0..70 {
+            assert!(auth.login(IP_A, "host", "correct horse").await.is_ok());
+        }
+        for i in 0..60 {
+            assert_eq!(
+                auth.login(IP_A, &format!("user{i}@example.test"), "guess").await,
+                Err(LoginError::Invalid)
+            );
+        }
+        assert_eq!(
+            auth.login(IP_A, "host", "correct horse").await.unwrap_err(),
+            LoginError::Locked
+        );
+        assert!(auth.login(IP_B, "host", "correct horse").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn concurrent_spraying_from_one_client_cannot_exceed_its_failure_limit() {
+        let auth = Arc::new(auth_with("host", "correct horse"));
+        let tasks: Vec<_> = (0..150)
+            .map(|i| {
+                let auth = auth.clone();
+                tokio::spawn(async move { auth.login(IP_A, &format!("u{i}@example.test"), "guess").await })
+            })
+            .collect();
+        let mut invalid = 0;
+        for t in tasks {
+            if t.await.unwrap() == Err(LoginError::Invalid) {
+                invalid += 1;
+            }
+        }
+        // 검증 중인 시도도 세므로 동시에 보내도 한도만큼만 비밀번호를 확인한다.
+        assert!(invalid <= MAX_IP_FAILURES as usize, "{invalid} password checks");
+    }
+
+    #[tokio::test]
     async fn busy_verification_rejects_without_recording_a_password_failure() {
         let auth = auth_with("host", "correct horse");
         let slots = auth
@@ -857,7 +1169,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             auth.login(IP_A, "host", "correct horse").await,
-            Err(LoginError::Locked)
+            Err(LoginError::Busy)
         );
         assert!(auth.throttle.lock().unwrap().by_client.map.is_empty());
         drop(slots);

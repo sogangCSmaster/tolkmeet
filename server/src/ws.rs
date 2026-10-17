@@ -13,7 +13,7 @@ use tokio::sync::{Notify, mpsc};
 
 use crate::auth::{self, Auth};
 use crate::limit::TokenBucket;
-use crate::pipeline::{self, Pipeline, SpeakerHandle};
+use crate::pipeline::{Pipeline, SpeakerHandle};
 use crate::protocol::{ClientMsg, ErrorCode, PeerId, ServerMsg};
 use crate::providers::live::SttTokens;
 use crate::room::{self, JoinOutcome, JoinRequest, Outbox, Rooms};
@@ -165,6 +165,10 @@ async fn run(
                 if token.as_ref().is_some_and(|token| auth.session_user(token).is_none()) {
                     break;
                 }
+                // 방이 정리됐다(대기만 하다 오래 비어 있던 방). 알림은 정리할 때 보냈으니 연결을 닫는다.
+                if session.as_ref().is_some_and(|(room, _)| !rooms.exists(room)) {
+                    break;
+                }
                 continue;
             }
             _ = tokio::time::sleep_until(deadline) => break,
@@ -306,31 +310,30 @@ async fn run(
                 rooms.set_settings(room, id, settings)
             }
             // 입장 여부·번역 사용 여부는 파이프라인이 자막을 보낼 때마다 확인한다.
+            // 너무 긴 텍스트는 파이프라인이 `MAX_STT_CHARS`까지 자른다(거부하면 그 구간이 확정되지 않는다).
             (ClientMsg::Stt { seg, text, is_final }, Some((room, id))) => {
-                if text.chars().count() > pipeline::MAX_STT_CHARS {
-                    Err(ErrorCode::BadRequest)
-                } else {
-                    if stt_limit.take(Instant::now()) {
-                        speaker
-                            .get_or_insert_with(|| pipeline.speaker(room.clone(), id.clone()))
-                            .push(seg, text, is_final);
-                    }
-                    Ok(())
+                if stt_limit.take(Instant::now()) {
+                    speaker
+                        .get_or_insert_with(|| pipeline.speaker(room.clone(), id.clone()))
+                        .push(seg, text, is_final);
                 }
+                Ok(())
             }
             (ClientMsg::SttToken { id: req }, Some((room, id))) => {
                 while stt_tasks.try_join_next().is_some() {}
-                match (&stt, rooms.stt_langs(room, id)) {
-                    // 주최자의 번역 시간이 떨어졌으면 다시 시도해도 소용없다. 화면에 알린다.
-                    (Some(_), Some(_)) if rooms.is_out_of_time(room) => {
-                        tx.send(ServerMsg::Notice { code: crate::protocol::NoticeCode::QuotaExceeded });
+                match (&stt, rooms.stt_langs(room, id), rooms.stt_blocked(room, Instant::now())) {
+                    // 주최자의 번역 시간이 떨어졌거나 주최자가 오래 없으면 다시 시도해도 소용없다. 까닭을 화면에 알린다
+                    // (풀리면 QuotaRestored·HostBack 알림으로 다시 시작한다).
+                    (Some(_), Some(_), Some(code)) => {
+                        tx.send(ServerMsg::Notice { code });
                         tx.send(ServerMsg::SttTokenDenied { id: req, retry: false });
                     }
                     // 발급 빈도는 참가자에 묶여 있어 다시 연결해도 새로 차지 않는다(재입장 토큰으로 연결만 바꿔 우회하지 못하게).
-                    (Some(issuer), Some(langs)) if rooms.take_stt_token(room, id, Instant::now()) => {
+                    (Some(issuer), Some(langs), None) if rooms.take_stt_token(room, id, Instant::now()) => {
                         // 발급은 Gemini 왕복(수백 ms)이라 연결 루프를 막지 않도록 따로 돌린다.
                         let issue = issuer.issue(&langs);
                         let tx = tx.clone();
+                        let (rooms, room, id) = (rooms.clone(), room.clone(), id.clone());
                         stt_tasks.spawn(async move {
                             let msg = match issue.await {
                                 Ok(grant) => ServerMsg::SttToken {
@@ -340,13 +343,15 @@ async fn run(
                                 },
                                 Err(err) => {
                                     tracing::warn!(%err, "stt token failed");
+                                    // 받지 못한 토큰은 한도에서 빼지 않는다(다시 요청하게 하는 실패라서).
+                                    rooms.give_back_stt_token(&room, &id, Instant::now());
                                     ServerMsg::SttTokenDenied { id: req, retry: true }
                                 }
                             };
                             tx.send(msg);
                         });
                     }
-                    (Some(_), Some(_)) => tx.send(ServerMsg::SttTokenDenied { id: req, retry: true }),
+                    (Some(_), Some(_), None) => tx.send(ServerMsg::SttTokenDenied { id: req, retry: true }),
                     // 키가 없거나, 입장 전이거나, 번역이 꺼진 방
                     _ => tx.send(ServerMsg::SttTokenDenied { id: req, retry: false }),
                 }
@@ -766,6 +771,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn overlong_stt_text_is_truncated_not_rejected() {
+        let server = TestServer::start().await;
+        let room = server.room();
+        let mut socket = welcomed(&server, &room).await;
+        let limit = crate::pipeline::MAX_STT_CHARS;
+        send(
+            &mut socket,
+            ClientMsg::Stt { seg: 0, text: "가".repeat(limit + 500), is_final: true },
+        )
+        .await;
+        let (msgs, closed) = drain(&mut socket).await;
+        assert!(!closed);
+        assert!(!msgs.iter().any(|m| matches!(m, ServerMsg::Error { .. })), "{msgs:?}");
+        // 이 서버에는 번역기가 없어 원문만 확정된다. 확정은 와야 한다(자막이 "번역 중"에 머물지 않게).
+        let finals: Vec<usize> = msgs
+            .iter()
+            .filter_map(|m| match m {
+                ServerMsg::Caption { src, is_final: true, .. } => Some(src.chars().count()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(finals, [limit]);
+    }
+
+    #[tokio::test]
     async fn stt_tokens_go_only_to_admitted_participants_in_translated_rooms() {
         let server = TestServer::start().await;
         let room = server.room();
@@ -851,6 +881,21 @@ mod tests {
             next_message(&mut socket).await,
             Some(ServerMsg::SttTokenDenied { retry: false, .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn failing_token_issuance_cannot_be_retried_without_limit() {
+        // 발급이 실패하면 한도를 돌려주지만 횟수가 묶여, 실패를 일으켜 가며 Gemini를 계속 부르게 하지 못한다.
+        let failing = Arc::new(crate::providers::live::testing::FakeTokens { fail: true, ..Default::default() });
+        let server = TestServer::start_with(Some(failing.clone())).await;
+        let room = server.room();
+        let mut socket = welcomed(&server, &room).await;
+        for _ in 0..20 {
+            send(&mut socket, ClientMsg::SttToken { id: 7 }).await;
+            assert!(matches!(next_message(&mut socket).await, Some(ServerMsg::SttTokenDenied { retry: true, .. })));
+        }
+        let calls = failing.langs.lock().unwrap().len();
+        assert_eq!(calls, room::STT_TOKEN_BURST as usize + 2, "{calls} upstream calls");
     }
 
     #[tokio::test]

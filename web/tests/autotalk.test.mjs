@@ -2,9 +2,11 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { loadModule } from './load-module.mjs'
 
-function autoTalk(a = 'ko', b = 'en') {
+function autoTalk(a = 'ko', b = 'en', { join = true } = {}) {
   const sides = []
   let speech
+  let started = 0
+  const quota = []
   class TalkSide {
     constructor(code, lang, partner, track, events) {
       this.lang = lang
@@ -18,16 +20,19 @@ function autoTalk(a = 'ko', b = 'en') {
     close() {}
   }
   const startSpeech = (o) => {
+    started++
     speech = { o, mic: o.mic, warm: o.warm, setMic(on) { this.mic = on }, setWarm(on) { this.warm = on }, setLang() {}, close() {} }
     return speech
   }
   const detect = loadModule('lib/langdetect.ts')
   const { AutoTalk } = loadModule('lib/autotalk.ts', { './talk': { TalkSide }, './speech': { startSpeech }, './langdetect': detect }, { Map })
-  const events = { onJoined() {}, onCaption() {}, onSttStatus() {}, onFailed() {} }
+  const events = { onJoined() {}, onCaption() {}, onSttStatus() {}, onQuota: (out) => quota.push(out), onFailed() {} }
   const talk = new AutoTalk('c', a, b, {}, events)
-  sides[0].events.onJoined('A')
-  sides[1].events.onJoined('B')
-  return { talk, a: sides[0], b: sides[1], send: (...args) => speech.o.sendStt(...args), speech: () => speech }
+  if (join) {
+    sides[0].events.onJoined('A')
+    sides[1].events.onJoined('B')
+  }
+  return { talk, a: sides[0], b: sides[1], send: (...args) => speech.o.sendStt(...args), speech: () => speech, started: () => started, quota }
 }
 
 test('auto talk holds unclear interims and sends each utterance to its language', () => {
@@ -78,4 +83,22 @@ test('switching back within one utterance keeps one seg and an unsure final foll
   t.send(1, 'OK', true) // 확정은 짐작도 어려움(라틴 2자) → 마지막으로 보낸 영어 쪽
   assert.deepEqual(JSON.parse(JSON.stringify(t.b.sent)), [[0, 'Google Cloud', false], [0, '', false], [1, 'Deploy pipeline', false], [1, 'OK', true]])
   assert.deepEqual(JSON.parse(JSON.stringify(t.a.sent)), [[0, 'Google Cloud에서', false], [0, 'Google Cloud에서 네', true]])
+})
+
+test('the second connection joining does not lift the out-of-time state the first one reported', () => {
+  const t = autoTalk('ko', 'en', { join: false })
+  // TalkSide 입장 순서: 처음 상태(false) → 입장 → 서버가 바로 막혔다고 알림
+  t.a.events.onQuota(false)
+  t.a.events.onJoined('A')
+  t.a.events.onQuota(true)
+  t.b.events.onQuota(false)
+  t.b.events.onJoined('B')
+  assert.equal(t.started(), 0) // 토큰을 받으려고 음성 인식을 열지 않는다
+  assert.equal(t.quota.at(-1), true)
+  t.b.events.onQuota(true)
+  t.a.events.onQuota(false) // 한쪽만 풀렸다
+  assert.equal(t.started(), 0)
+  t.b.events.onQuota(false) // 둘 다 풀렸다
+  assert.equal(t.started(), 1)
+  assert.equal(t.quota.at(-1), false)
 })

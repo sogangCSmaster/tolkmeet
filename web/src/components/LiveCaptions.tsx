@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { fetchRoom } from '../lib/api'
 import { useAuth } from '../lib/auth'
 import { applyCaption, type Caption, type CaptionMsg } from '../lib/captions'
 import { useI18n, type MessageKey } from '../lib/i18n'
@@ -14,6 +15,7 @@ import { downloadText, formatTranscript, Transcript, transcriptFileName } from '
 import { Icon } from './Icon'
 import { Notice } from './Meeting'
 import { LocaleSelect } from './LocaleSelect'
+import { QuotaModal } from './QuotaModal'
 import { Select } from './Select'
 import { StatusPage } from './StatusPage'
 import { ToLatest } from './ToLatest'
@@ -39,7 +41,7 @@ export function LiveCaptions({ code }: { code: string }) {
   const auth = useAuth()
   if (auth.status === 'loading') return null
   if (auth.status !== 'host') {
-    return <Notice title={t('live.title')} body={t('talk.hostOnly')} onHome={() => navigate('/')} />
+    return <Notice title={t('live.title')} body={t('live.hostOnly')} onHome={() => navigate('/')} />
   }
   return <Live code={code} />
 }
@@ -60,10 +62,15 @@ function Live({ code }: { code: string }) {
   // 언어 설정은 처음에 펼쳐 두어 확인하게 한다. 닫으면 자막만 크게 보인다.
   const [settingsOpen, setSettingsOpen] = useState(true)
   const [failure, setFailure] = useState<MessageKey | null>(null)
+  // 번역 시간이 떨어지면 듣지 않는다(AutoTalk). 시간을 추가하면 서버 알림으로 다시 듣는다.
+  const [outOfTime, setOutOfTime] = useState(false)
+  const [quotaClosed, setQuotaClosed] = useState(false)
   const [transcript] = useState(() => new Transcript())
   const [hasTranscript, setHasTranscript] = useState(false)
   const talkRef = useRef<AutoTalk | null>(null)
   const langsRef = useRef(langs)
+  /** 직접 언어를 고쳤는지(그 뒤에 온 예약 언어로 되돌리지 않게) */
+  const touchedRef = useRef(false)
   const listeningRef = useRef(listening)
   // 실패하면 연결과 마이크를 모두 정리한다.
   const live = failure === null
@@ -98,6 +105,10 @@ function Live({ code }: { code: string }) {
         setHasTranscript(transcript.size > 0)
       },
       onSttStatus: setStt,
+      onQuota: (out) => {
+        setOutOfTime(out)
+        if (!out) setQuotaClosed(false)
+      },
       onFailed: (reason) => setFailure(FAILURES[reason] ?? 'room.cannotJoin'),
     })
     talk.setListening(listeningRef.current)
@@ -116,7 +127,25 @@ function Live({ code }: { code: string }) {
     talkRef.current?.setListening(hearing)
   }, [hearing, ids])
 
+  // 예약할 때 정한 언어 쌍이 있으면 그것으로 시작한다. 회의 정보는 마이크 준비와 함께(기다리지 않고) 받는다.
+  useEffect(() => {
+    let cancelled = false
+    fetchRoom(code)
+      .then((r) => {
+        if (cancelled || touchedRef.current || !r?.langA || !r.langB) return
+        const next = { a: r.langA, b: r.langB }
+        langsRef.current = next
+        setLangs(next)
+        talkRef.current?.setLangs(next.a, next.b)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [code])
+
   function changeLang(side: 'a' | 'b', lang: string) {
+    touchedRef.current = true
     const next = { ...langs, [side]: lang }
     langsRef.current = next
     setLangs(next)
@@ -172,15 +201,17 @@ function Live({ code }: { code: string }) {
     ? 'talk.noMic'
     : !ready
       ? 'talk.connecting'
-      : !hearing
-        ? 'live.paused'
-        : stt === 'unavailable'
-          ? 'captions.sttUnavailable'
-          : stt === 'paused'
-            ? 'captions.sttPaused'
-            : stt === 'live'
-              ? 'live.listening'
-              : 'talk.connecting'
+      : outOfTime
+        ? 'quota.title'
+        : !hearing
+          ? 'live.paused'
+          : stt === 'unavailable'
+            ? 'captions.sttUnavailable'
+            : stt === 'paused'
+              ? 'captions.sttPaused'
+              : stt === 'live'
+                ? 'live.listening'
+                : 'talk.connecting'
 
   const on = hearing && stt === 'live' && !micError
   return (
@@ -252,6 +283,7 @@ function Live({ code }: { code: string }) {
         </p>
       )}
       <LiveFeed captions={captions} />
+      {outOfTime && !quotaClosed && <QuotaModal onClose={() => setQuotaClosed(true)} />}
     </div>
   )
 }

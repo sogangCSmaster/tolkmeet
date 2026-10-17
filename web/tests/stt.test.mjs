@@ -522,3 +522,22 @@ test('a session that takes long to become ready does not drop the utterance sent
   h.sessions[0].events.onFinal('준비가 늦어도 남아요.')
   assert.deepEqual(JSON.parse(JSON.stringify(h.sent)), [[0, '준비가 늦어도 남아요.', true]])
 })
+
+test('a long utterance whose final never came does not swallow the next utterance', async () => {
+  const h = setup({ lang: 'en' })
+  await h.grant()
+  h.ready()
+  const ev = h.sessions[0].events
+  const long = 'x'.repeat(801)
+  h.c.vad({ kind: 'start', frames: [speech(), speech()] })
+  ev.onInterim(long) // 800자를 넘어 앞부분을 먼저 확정한다
+  ev.onInterim(`${long} tail`)
+  h.c.vad({ kind: 'end', frames: [silence()] })
+  // 첫 발화의 확정이 오지 않은 채 다음 발화가 시작된다.
+  h.c.vad({ kind: 'start', frames: [speech(), speech()] })
+  ev.onInterim('hello world')
+  h.c.vad({ kind: 'end', frames: [silence()] })
+  ev.onFinal('hello world.')
+  h.advance(4000)
+  assert.ok(h.sent.some(([, text, final]) => final && text === 'hello world.'), JSON.stringify(h.sent.map(([s, t, f]) => [s, t.slice(0, 20), f])))
+})

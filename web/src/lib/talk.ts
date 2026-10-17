@@ -16,6 +16,8 @@ export type TalkEvents = {
   onJoined: (selfId: string) => void
   onCaption: (msg: CaptionMsg) => void
   onSttStatus: (status: SttStatus | null) => void
+  /** 주최자의 번역 시간이 떨어졌다(true) / 다시 생겼다(false). 그동안 음성 인식을 멈춘다. */
+  onQuota: (outOfTime: boolean) => void
   /** 입장 실패·연결 끊김. 이 연결은 이미 닫혔다. 다시 시도하려면 새로 만든다. */
   onFailed: (reason: TalkFailure) => void
 }
@@ -35,6 +37,8 @@ export class TalkSide {
   /** 음성 인식 세션 열쇠("내 언어|상대 언어") */
   private lang: string
   private closed = false
+  private joined = false
+  private outOfTime = false
   private track: MediaStreamTrack | null
   private events: TalkEvents
 
@@ -99,8 +103,15 @@ export class TalkSide {
         // 대면 대화 연결(같은 계정, 마이크·카메라·화면 모두 끔: 다른 한쪽이나 끊긴 뒤 아직 정리되지 않은 내 옛 연결)만
         // 있어야 한다. 게스트가 있거나 같은 계정이라도 미디어를 켠 연결(회의 탭)이 있으면 진짜 회의다.
         if (msg.peers.some((p) => !p.host || p.media.mic || p.media.cam || p.media.screen)) return this.fail('in_use')
+        this.joined = true
+        // 새 연결은 막히지 않은 상태로 시작한다. 화면의 지난 상태(다시 연결하기 전)를 지우고, 아직 막혀 있으면 서버가 입장 직후 다시 알린다.
+        this.events.onQuota(false)
         this.events.onJoined(msg.you)
         this.startSpeech()
+        break
+      case 'notice':
+        if (msg.code === 'quota_exceeded') this.setOutOfTime(true)
+        else if (msg.code === 'quota_restored') this.setOutOfTime(false)
         break
       case 'caption':
         this.events.onCaption(msg)
@@ -122,6 +133,15 @@ export class TalkSide {
         else console.warn('server error', msg.code, msg.message)
         break
     }
+  }
+
+  /** 번역 시간이 떨어지면 음성 인식을 멈추고(세션을 열어 둬도 자막이 나오지 않는다), 다시 생기면 다시 시작한다. */
+  private setOutOfTime(out: boolean) {
+    if (this.outOfTime === out || this.closed) return
+    this.outOfTime = out
+    if (out) this.stopSpeech()
+    else if (this.joined) this.startSpeech()
+    this.events.onQuota(out)
   }
 
   private fail(reason: TalkFailure) {
@@ -148,7 +168,7 @@ export class TalkSide {
   }
 
   private startSpeech() {
-    if (this.speech || !this.track) return
+    if (this.speech || !this.track || this.outOfTime) return
     this.speech = startSpeech({
       track: this.track,
       lang: this.lang,

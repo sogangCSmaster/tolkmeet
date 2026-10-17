@@ -10,6 +10,15 @@ export const SIGN_IN_URL = `${APP_URL}/login`
 export const SIGNUP_URL = `${APP_URL}/signup`
 export const GITHUB_URL = 'https://github.com/sogangCSmaster/tolkmeet'
 
+/** 운영 사업자(약관·처리방침 본문과 같은 값). 전화번호·통신판매업 신고번호는 받으면 더한다. */
+export const COMPANY = {
+  name: '휘슬리',
+  rep: '박혜연',
+  regNo: '155-03-03588',
+  address: '서울특별시 구로구 구일로4길 65',
+  email: 'support@tolkmeet.com',
+}
+
 /** 언어 선택에 보이는 순서 */
 export const LOCALES: Dict[] = [en, ko, ja]
 
