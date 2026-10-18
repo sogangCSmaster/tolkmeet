@@ -243,6 +243,7 @@ a:hover { text-decoration: underline; }
 @keyframes pv-flow { 0% { transform: translateX(0); opacity: 0; } 10% { opacity: .9; } 90% { opacity: .9; } 100% { transform: translateX(calc(100cqw - 6px)); opacity: 0; } }
 @keyframes pv-flow-rev { 0% { transform: translateX(calc(100cqw - 6px)); opacity: 0; } 10% { opacity: .5; } 90% { opacity: .5; } 100% { transform: translateX(0); opacity: 0; } }
 .pv-wire-label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: rgba(235,235,245,0.6); }
+.pv-wire-label svg { flex: none; }
 .pv-chips { margin: 36px 0 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
 .pv-chip { display: inline-flex; align-items: baseline; gap: 4px; padding: 9px 16px; border-radius: 980px; background: rgba(255,255,255,0.07); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08); font-size: 15px; color: rgba(235,235,245,0.75); transition: background .2s, transform .2s; }
 .pv-chip b { font-weight: 700; color: #FFFFFF; font-size: 17px; }
@@ -374,4 +375,7 @@ a:hover { text-decoration: underline; }
   .lang-cur { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .lang summary { gap: 3px; padding: 0 8px 0 7px; }
   .nav-links { column-gap: 16px; }
+  /* 번역이 두 줄로 접히면 붉은 표시가 첫 줄 앞에 붙어 있게 한다(flex면 왼쪽 끝으로 떨어진다) */
+  .pv-tr { display: block; }
+  .pv-tr i { vertical-align: middle; margin: -3px 10px 0 0; }
 }
