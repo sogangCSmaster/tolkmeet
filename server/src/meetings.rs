@@ -237,6 +237,36 @@ pub fn end_rooms(c: &rusqlite::Connection, codes: &[String], now: i64) -> rusqli
     Ok(())
 }
 
+/// 주최자가 나가기 버튼으로 끝낸 방: 예약 회의도 정한 시간과 상관없이 끝난 회의로 남겨
+/// 링크로 다시 열리지 않게 한다. 시작도 안 한 즉석 회의는 지운다.
+pub fn end_rooms_now(c: &rusqlite::Connection, codes: &[String], now: i64) -> rusqlite::Result<()> {
+    for code in codes {
+        c.execute(
+            "UPDATE meetings SET ended_at = COALESCE(last_active_at, started_at, ?2)
+             WHERE code = ?1 AND ended_at IS NULL AND (started_at IS NOT NULL OR starts_at IS NOT NULL)",
+            params![code, now],
+        )?;
+        c.execute(
+            "DELETE FROM meetings WHERE code = ?1 AND starts_at IS NULL AND started_at IS NULL",
+            params![code],
+        )?;
+    }
+    Ok(())
+}
+
+pub fn spawn_end_now(state: &AppState, ended: Vec<String>) {
+    if ended.is_empty() {
+        return;
+    }
+    let db = state.auth.db().clone();
+    tokio::spawn(async move {
+        let now = now_secs();
+        if let Err(err) = db.call(move |c| end_rooms_now(c, &ended, now)).await {
+            tracing::error!(%err, "could not record meetings ended by the host");
+        }
+    });
+}
+
 /// 서버가 다시 시작되면 메모리의 즉석 회의 방은 모두 사라진다. 그 회의 기록을 닫아 둔다
 /// (시작했으면 마지막 활동 시각으로 끝내고, 시작도 안 했으면 지운다). 예약 회의는 링크로 다시 열 수 있으므로 그대로 둔다.
 pub fn close_orphans(db: &Db) -> rusqlite::Result<()> {

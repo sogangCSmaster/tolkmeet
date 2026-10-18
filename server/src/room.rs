@@ -29,6 +29,8 @@ pub const MAX_ROOMS_PER_HOST: usize = 20;
 pub const ROOM_IDLE_TTL: Duration = Duration::from_secs(30 * 60);
 /// 연결이 끊긴 참가자가 주최자 수락 없이 돌아올 수 있는 시간
 pub const RESUME_TTL: Duration = Duration::from_secs(2 * 60);
+/// 주최자가 나가기로 끝낸 방을 다시 열지 않는 시간. 그사이 회의 기록에 끝난 시각이 남는다(주기 작업 1분).
+const ENDED_TOMBSTONE: Duration = Duration::from_secs(10 * 60);
 /// 음성 인식 토큰 발급 빈도(참가자당). 세션은 3분 넘게 조용하거나 언어가 바뀔 때 새로 연다. 평소 몇 분에 1개면 충분하다.
 /// 연결이 아니라 참가자에 묶는다: 재입장 토큰으로 연결만 바꿔 가며 새 한도를 받지 못하게.
 pub const STT_TOKENS_PER_SEC: f64 = 1.0 / 30.0;
@@ -427,6 +429,13 @@ pub struct Rooms {
     spend_paused: AtomicBool,
     /// 주최자별 말 없는 토큰 한도(`HOST_TEXTLESS_*`). 잠금 순서: `rooms` 다음에 잡는다.
     host_textless: Mutex<HashMap<String, Bucket>>,
+    /// 주최자가 끝내 지운 방에서 마지막 측정 뒤로 잰 번역 시간. 다음 `meter`가 함께 돌려준다(지운 방의 시간을 잃지 않게).
+    /// 잠금 순서: `rooms` 다음에 잡는다.
+    ended_usage: Mutex<Vec<Metered>>,
+    /// 주최자가 끝내 지운 방의 코드(`take_host_ended`). 예약 회의도 정한 시간과 상관없이 끝난 회의로 남긴다. 잠금 순서: `rooms` 다음.
+    ended_codes: Mutex<Vec<String>>,
+    /// 주최자가 나가기로 끝낸 방과 끝낸 때(`ENDED_TOMBSTONE` 동안). 예약 회의 링크가 그사이 다시 열리지 않게 한다. 잠금 순서: `rooms` 다음.
+    ended_recently: Mutex<HashMap<String, Instant>>,
 }
 
 /// 번역 시간 측정 한 번의 결과: 이 방에서 지난 측정 뒤로 번역이 돌아간 초.
@@ -465,6 +474,9 @@ impl Rooms {
             out_of_time: Mutex::default(),
             spend_paused: AtomicBool::new(false),
             host_textless: Mutex::default(),
+            ended_usage: Mutex::default(),
+            ended_codes: Mutex::default(),
+            ended_recently: Mutex::default(),
         }
     }
 
@@ -491,9 +503,12 @@ impl Rooms {
 
     /// 예약해 둔 코드로 방을 연다(누군가 링크를 처음 열 때). 이미 있으면 그대로 둔다.
     pub fn open_reserved(&self, host_account: &str, code: &str, settings: RoomSettings) {
-        self.rooms
-            .lock()
-            .unwrap()
+        let mut rooms = self.rooms.lock().unwrap();
+        // 주최자가 방금 끝낸 회의는 기록에 끝난 시각이 남기 전이라도 다시 열지 않는다.
+        if self.ended_recently.lock().unwrap().get(code).is_some_and(|t| t.elapsed() < ENDED_TOMBSTONE) {
+            return;
+        }
+        rooms
             .entry(code.to_owned())
             .or_insert_with(|| Room::new(host_account, settings))
             .reserved = true;
@@ -531,7 +546,7 @@ impl Rooms {
         let blocked = self.out_of_time_hosts();
         let mut rooms = self.rooms.lock().unwrap();
         let paused = self.spend_paused();
-        let mut out = Vec::new();
+        let mut out = std::mem::take(&mut *self.ended_usage.lock().unwrap());
         for (code, room) in rooms.iter_mut() {
             room.accrue(now, paused || blocked.contains(&room.host_account));
             if room.settings.translation && room.host_away(now) {
@@ -633,6 +648,9 @@ impl Rooms {
         for m in metered {
             if let Some(room) = rooms.get_mut(&m.code) {
                 room.unreported += m.seconds as f64;
+            } else if m.seconds > 0 {
+                // 주최자가 끝내 지운 방: 다음 측정이 다시 돌려주게 한다(기록이 실패해도 잃지 않게).
+                self.ended_usage.lock().unwrap().push(m.clone());
             }
         }
     }
@@ -964,6 +982,60 @@ impl Rooms {
         }
     }
 
+    /// 나가기 버튼으로 나간다. 나간 사람이 주최자이고 남은 주최자 연결이 없으면 회의를 끝낸다(남은 사람 모두에게 `Ended`).
+    /// 창을 닫거나 연결이 끊긴 것은 `leave`로 처리하고, 주최자가 `RESUME_TTL` 안에 돌아오지 않으면 `sweep`이 끝낸다.
+    pub fn leave_explicit(&self, code: &str, id: &str) {
+        let now = Instant::now();
+        // 판단과 끝내기를 한 잠금 안에서 한다(그사이 들어온 다른 주최자 연결까지 끝내지 않게).
+        let mut rooms = self.rooms.lock().unwrap();
+        let ends = rooms.get(code).is_some_and(|r| {
+            r.members.get(id).is_some_and(|m| m.peer.host) && !r.members.iter().any(|(other, m)| other != id && m.peer.host)
+        });
+        if ends {
+            self.end_locked(&mut rooms, code, now, true);
+        } else {
+            drop(rooms);
+            self.leave(code, id);
+        }
+    }
+
+    /// 방을 지우고 남은 사람(입장한 사람·대기 중인 사람)에게 `Ended`를 보낸다. 지우기 전까지 잰 번역 시간과
+    /// 방 코드는 다음 `meter`·`take_host_ended`가 돌려준다. 연결은 받은 쪽이 닫는다(그때의 `leave`는 방이 없어 아무것도 하지 않는다).
+    /// `by_button`: 주최자가 나가기로 끝냈다(예약 회의도 끝난 회의로 남기고 잠시 다시 열지 않는다). 아니면 끊긴 주최자가
+    /// 돌아오지 않은 것이라, 예약 회의는 정한 시간 안이면 링크로 다시 열 수 있게 평소처럼 기록한다(`sweep`이 돌려준다).
+    fn end_locked(&self, rooms: &mut HashMap<String, Room>, code: &str, now: Instant, by_button: bool) {
+        let Some(mut room) = rooms.remove(code) else { return };
+        let blocked = self.out_of_time.lock().unwrap().contains(&room.host_account);
+        room.accrue(now, self.spend_paused() || blocked);
+        room.peak = room.peak.max(room.members.len());
+        let seconds = room.unreported.round() as i64;
+        if seconds > 0 || room.peak > room.reported_peak {
+            self.ended_usage.lock().unwrap().push(Metered {
+                host: room.host_account.clone(),
+                code: code.to_owned(),
+                seconds,
+                peak: room.peak,
+                langs: room.members.values().map(|m| m.peer.lang.as_str()).collect::<HashSet<_>>().len(),
+            });
+        }
+        for member in room.members.values() {
+            send(&member.tx, ServerMsg::Ended);
+        }
+        for w in &room.waiting {
+            send(&w.tx, ServerMsg::Ended);
+        }
+        if by_button {
+            self.ended_codes.lock().unwrap().push(code.to_owned());
+            self.ended_recently.lock().unwrap().insert(code.to_owned(), now);
+        }
+        tracing::info!(room = %code, by_button, "meeting ended by host");
+    }
+
+    /// 주최자가 나가기로 끝낸 방의 코드. 주기 작업이 측정 전에 가져가 측정·기록 뒤에 끝난 회의로 남긴다.
+    pub fn take_host_ended(&self) -> Vec<String> {
+        std::mem::take(&mut *self.ended_codes.lock().unwrap())
+    }
+
     /// 이 참가자가 지금 입장해 있는지(자막 파이프라인이 화자가 나갔는지 가리는 데 쓴다).
     pub fn is_member(&self, code: &str, id: &str) -> bool {
         self.rooms
@@ -1077,7 +1149,22 @@ impl Rooms {
     /// 오래 빈 방을 지운다(주기 작업). 지운 방의 코드를 돌려준다(회의 기록에 끝난 시각을 남기려고).
     pub fn sweep(&self, now: Instant) -> Vec<String> {
         let mut rooms = self.rooms.lock().unwrap();
-        let mut ended = Vec::new();
+        // 주최자 연결이 모두 끊긴 뒤 다시 들어올 수 있는 시간(`RESUME_TTL`)이 지나도록 돌아오지 않았는데 남은 사람이 있으면
+        // 회의를 끝낸다(남은 사람이 주최자의 회의에 계속 머물지 않게). 아무도 없는 방은 아래에서 평소대로 지운다.
+        let abandoned: Vec<String> = rooms
+            .iter()
+            .filter(|(_, r)| {
+                !r.members.is_empty()
+                    && !r.members.values().any(|m| m.peer.host)
+                    && r.host_left_at.is_some_and(|t| now.saturating_duration_since(t) >= RESUME_TTL)
+            })
+            .map(|(code, _)| code.clone())
+            .collect();
+        for code in &abandoned {
+            self.end_locked(&mut rooms, code, now, false);
+        }
+        self.ended_recently.lock().unwrap().retain(|_, t| now.saturating_duration_since(*t) < ENDED_TOMBSTONE);
+        let mut ended = abandoned;
         rooms.retain(|code, r| {
             let keep = (r.reserved && !r.waiting.is_empty())
                 || r.idle_since.is_none_or(|t| now.duration_since(t) < ROOM_IDLE_TTL);
@@ -1312,6 +1399,57 @@ mod tests {
         assert_eq!(billed(&rooms, t0 + secs(120)), 0);
         assert!(rooms.speech_audience(&code, &side, t0 + secs(120)).is_some());
         assert_eq!(billed(&rooms, t0 + secs(180)), 60);
+    }
+
+    #[test]
+    fn the_host_leaving_by_button_ends_the_meeting_for_everyone() {
+        let (rooms, code, host_id, _host, guest_id, mut guest, _) = room_with_admitted_guest();
+        guest.drain();
+        rooms.leave_explicit(&code, &host_id);
+        assert!(guest.drain().iter().any(|m| matches!(m, ServerMsg::Ended)), "the guest is told");
+        assert!(!rooms.is_member(&code, &guest_id), "the room is gone");
+        // 지운 방도 회의 기록(인원)과 끝난 시각을 잃지 않는다.
+        assert!(rooms.meter(Instant::now()).iter().any(|m| m.code == code && m.peak == 2));
+        assert_eq!(rooms.take_host_ended(), vec![code.clone()]);
+        assert!(rooms.take_host_ended().is_empty(), "reported once");
+        // 방금 끝낸 회의는 예약 회의 링크로도 다시 열리지 않는다.
+        rooms.open_reserved(HOST, &code, RoomSettings { translation: true });
+        assert!(!rooms.exists(&code));
+        // 기록에 실패해 되돌린 시간도 방이 없으면 다음 측정이 다시 돌려준다.
+        let lost = Metered { host: HOST.into(), code: code.clone(), seconds: 30, peak: 2, langs: 1 };
+        rooms.restore_metered(std::slice::from_ref(&lost));
+        assert!(rooms.meter(Instant::now()).iter().any(|m| m.code == code && m.seconds == 30));
+
+        // 같은 계정의 다른 연결(대면 대화의 다른 쪽 등)이 남아 있으면 끝나지 않는다.
+        let (rooms, code, host_id, _host, guest_id, mut guest, _) = room_with_admitted_guest();
+        let second = client();
+        let _side = joined(rooms.join(&code, req("Host 2"), Some(HOST), second.tx.clone()).unwrap());
+        guest.drain();
+        rooms.leave_explicit(&code, &host_id);
+        assert!(!guest.drain().iter().any(|m| matches!(m, ServerMsg::Ended)));
+        assert!(rooms.is_member(&code, &guest_id));
+
+        // 게스트가 나가기를 누르면 그 사람만 나간다.
+        let (rooms, code, host_id, _host, guest_id, _guest, _) = room_with_admitted_guest();
+        rooms.leave_explicit(&code, &guest_id);
+        assert!(rooms.is_member(&code, &host_id));
+    }
+
+    #[test]
+    fn a_disconnected_host_who_does_not_come_back_ends_the_meeting() {
+        let (rooms, code, host_id, _host, guest_id, mut guest, _) = room_with_admitted_guest();
+        rooms.leave(&code, &host_id);
+        guest.drain();
+        let t0 = Instant::now();
+        // 다시 들어올 수 있는 동안은 기다린다.
+        assert!(rooms.sweep(t0 + RESUME_TTL - secs(5)).is_empty());
+        assert!(rooms.is_member(&code, &guest_id));
+        assert!(!guest.drain().iter().any(|m| matches!(m, ServerMsg::Ended)));
+        // 돌아오지 않으면 끝낸다. 예약 회의라면 정한 시간 안에 다시 열 수 있게 평소처럼 기록한다(나가기와 다르다).
+        assert!(rooms.sweep(t0 + RESUME_TTL + secs(5)).contains(&code));
+        assert!(rooms.take_host_ended().is_empty());
+        assert!(guest.drain().iter().any(|m| matches!(m, ServerMsg::Ended)));
+        assert!(!rooms.is_member(&code, &guest_id));
     }
 
     #[test]

@@ -178,6 +178,8 @@ pub enum ClientMsg {
     SttToken {
         id: u32,
     },
+    /// 나가기 버튼으로 나간다(창을 닫거나 연결이 끊긴 것과 구별한다). 마지막 남은 주최자 연결이 보내면 회의를 끝낸다.
+    Leave,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -255,6 +257,9 @@ pub enum ServerMsg {
     Notice {
         code: NoticeCode,
     },
+    /// 회의가 끝났다(주최자가 나가기를 눌렀거나, 연결이 끊긴 주최자가 다시 들어올 수 있는 시간 안에 돌아오지 않았다).
+    /// 받은 쪽은 다시 연결하지 않는다. 서버는 방을 지웠다.
+    Ended,
     Error {
         code: ErrorCode,
         message: String,

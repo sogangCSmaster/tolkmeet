@@ -19,6 +19,7 @@ import { downloadText, formatTranscript, Transcript, transcriptFileName } from '
 import type { Grant, SegCounter, SttStatus, TokenError } from '../lib/stt'
 import { CaptionPanel } from './CaptionPanel'
 import { CaptionPip } from './CaptionPip'
+import { EndMeetingDialog } from './EndMeetingDialog'
 import { MeetingGonePage } from './ErrorPages'
 import { KnockPrompts } from './KnockPrompts'
 import { QuotaModal } from './QuotaModal'
@@ -47,6 +48,10 @@ export type LeaveSummary = {
   /** 처음 입장한 시각(ms). 입장하지 못하고 나가면 null */
   joinedAt: number | null
   sentences: number
+  /** 주최자가 회의를 끝내서 나왔다(다시 참가할 수 없다) */
+  hostEnded?: boolean
+  /** 내가 주최자로 나가 회의를 끝냈다(다시 참가할 수 없다) */
+  ended?: boolean
 }
 
 type Status =
@@ -88,6 +93,8 @@ export function Room({ code, local, prefs, media, onPrefsChange, onMediaChange, 
   // 헤드폰 안내는 회의에 한 번만(재연결·번역 토글로 음성 인식이 다시 시작돼도).
   const echoHintedRef = useRef(false)
   const [isHost, setIsHost] = useState(false)
+  // 주최자가 나가기를 눌렀다: 모두의 회의가 끝나므로 확인을 받는다.
+  const [confirmEnd, setConfirmEnd] = useState(false)
   const [settings, setSettings] = useState<RoomSettings>({ translation: true })
   const [knocks, setKnocks] = useState<Knock[]>([])
   const [captions, setCaptions] = useState<Caption[]>([])
@@ -120,6 +127,8 @@ export function Room({ code, local, prefs, media, onPrefsChange, onMediaChange, 
   const sharingRef = useRef(false)
 
   const sigRef = useRef<Signaling | null>(null)
+  // 메시지 처리기(연결할 때 한 번 만든다)가 최신 나가기 함수를 부르게 한다.
+  const leaveRef = useRef<(hostEnded?: boolean) => void>(() => {})
   const meshRef = useRef<Mesh | null>(null)
   const screenRef = useRef<ScreenShare | null>(null)
   const speechRef = useRef<Speech | null>(null)
@@ -245,6 +254,12 @@ export function Room({ code, local, prefs, media, onPrefsChange, onMediaChange, 
         case 'denied':
           stoppedRef.current = true
           setStatus({ kind: 'error', message: 'room.denied' })
+          break
+        case 'ended':
+          // 주최자가 회의를 끝냈다. 다시 연결하지 않고 끝난 화면(자막 저장 포함)으로 간다.
+          stoppedRef.current = true
+          resumeRef.current = null
+          leaveRef.current(true)
           break
         case 'knock':
           setKnocks((ks) => [...ks.filter((k) => k.id !== msg.knock.id), msg.knock])
@@ -608,11 +623,19 @@ export function Room({ code, local, prefs, media, onPrefsChange, onMediaChange, 
     downloadText(transcriptFileName(code, new Date()), transcriptText())
   }
 
-  function leave() {
+  function leave(hostEnded = false) {
+    // 나가기 버튼: 서버에 알린다(창을 닫은 것과 구별해, 주최자면 모두의 회의를 끝낸다). 연결은 화면을 떠날 때 닫힌다.
+    if (!hostEnded) sigRef.current?.send({ t: 'leave' })
     // 나가는 클릭을 늦추지 않도록 텍스트는 저장을 누를 때 만든다.
     const size = transcriptRef.current.size
-    onLeave({ exportTranscript: size > 0 ? transcriptText : null, joinedAt: joinedAtRef.current, sentences: size })
+    // 주최자가 나가면 서버가 회의를 끝낸다. 입장한 적이 있을 때만(대기·입장 실패 화면에서 나간 것은 아니다).
+    const ended = !hostEnded && isHost && joinedAtRef.current != null
+    onLeave({ exportTranscript: size > 0 ? transcriptText : null, joinedAt: joinedAtRef.current, sentences: size, hostEnded, ended })
   }
+  // 렌더 중에는 ref를 바꾸지 않는다(그린 뒤에 최신 함수로 맞춘다).
+  useEffect(() => {
+    leaveRef.current = leave
+  })
 
   function admit(id: string) {
     sigRef.current?.send({ t: 'admit', id })
@@ -634,7 +657,7 @@ export function Room({ code, local, prefs, media, onPrefsChange, onMediaChange, 
         title={t('room.waitingTitle')}
         body={t('room.waitingBody')}
         actions={
-          <button className="btn btn-outline" onClick={leave}>
+          <button className="btn btn-outline" onClick={() => leave()}>
             {t('room.cancel')}
           </button>
         }
@@ -653,7 +676,7 @@ export function Room({ code, local, prefs, media, onPrefsChange, onMediaChange, 
             <button className="btn btn-outline" onClick={onRejoin}>
               {t('room.retry')}
             </button>
-            <button className="btn btn-primary" onClick={leave}>
+            <button className="btn btn-primary" onClick={() => leave()}>
               {t('room.leave')}
             </button>
           </>
@@ -822,7 +845,13 @@ export function Room({ code, local, prefs, media, onPrefsChange, onMediaChange, 
           </button>
         )}
         <span className="capsule-sep" aria-hidden="true" />
-        <button className="ctl leave" aria-label={t('ctl.leave')} onClick={leave}>
+        {/* 주최자가 나가면 모두의 회의가 끝난다(서버). 버튼 이름으로 미리 알린다. */}
+        <button
+          className="ctl leave"
+          aria-label={t(isHost ? 'ctl.endMeeting' : 'ctl.leave')}
+          title={t(isHost ? 'ctl.endMeeting' : 'ctl.leave')}
+          onClick={() => (isHost ? setConfirmEnd(true) : leave())}
+        >
           <Icon name="call_end" />
         </button>
       </div>
@@ -855,6 +884,7 @@ export function Room({ code, local, prefs, media, onPrefsChange, onMediaChange, 
         />
       )}
       {outOfTime && isHost && !quotaClosed && <QuotaModal onClose={() => setQuotaClosed(true)} />}
+      {confirmEnd && <EndMeetingDialog onEnd={() => leave()} onClose={() => setConfirmEnd(false)} />}
       {isHost && <KnockPrompts knocks={knocks} onAdmit={admit} onDeny={deny} />}
       {/* 계속 뜨는 안내가 아래, 잠깐 뜨는 안내가 그 위에 쌓인다(겹치지 않게). */}
       <div className="toasts">

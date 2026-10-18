@@ -166,7 +166,7 @@ function EndedPage({
   return (
     <StatusPage
       eyebrow={t('lobby.meeting', { code })}
-      title={t('room.left')}
+      title={t(summary?.hostEnded ? 'room.hostEnded' : summary?.ended ? 'room.youEnded' : 'room.left')}
       actions={
         <>
           {exportTranscript && !prompt && (
@@ -175,9 +175,11 @@ function EndedPage({
               {t('ended.save')}
             </button>
           )}
-          <button className="btn btn-outline" onClick={onRejoin}>
-            {t('room.rejoin')}
-          </button>
+          {!summary?.hostEnded && !summary?.ended && (
+            <button className="btn btn-outline" onClick={onRejoin}>
+              {t('room.rejoin')}
+            </button>
+          )}
           <button className="btn btn-primary" onClick={() => navigate('/')}>
             {t('room.home')}
           </button>

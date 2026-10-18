@@ -238,6 +238,15 @@ async fn run(
             }
         }
 
+        // 나가기 버튼: 이 연결을 정리하고 닫는다. 마지막 주최자 연결이면 회의가 끝난다(`Rooms::leave_explicit`).
+        if matches!(msg, ClientMsg::Leave) {
+            if let Some((room, id)) = session.take() {
+                tracing::info!(room = %room, peer = %id, "left (button)");
+                rooms.leave_explicit(&room, &id);
+            }
+            break;
+        }
+
         let result = match (msg, &session) {
             (
                 ClientMsg::Join {
@@ -322,6 +331,8 @@ async fn run(
                 }
                 Ok(())
             }
+            // 위에서 처리하고 루프를 끝냈다.
+            (ClientMsg::Leave, Some(_)) => Ok(()),
             (ClientMsg::SttToken { id: req }, Some((room, id))) => {
                 while stt_tasks.try_join_next().is_some() {}
                 match (&stt, rooms.stt_langs(room, id), rooms.stt_blocked(room, Instant::now())) {

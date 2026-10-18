@@ -247,6 +247,8 @@ async fn run() {
         loop {
             tick.tick().await;
             let now = Instant::now();
+            // 주최자가 끝낸 방은 측정 전에 가져가 그 방의 마지막 시간이 기록된 뒤에 끝낸다(지운 회의에 시간이 붙지 않게).
+            let host_ended = sweeper.rooms.take_host_ended();
             // 번역 시간을 먼저 재고(지울 방 포함), 그다음 빈 방을 지워 끝난 회의로 남긴다.
             let metered = sweeper.rooms.meter(now);
             meetings::tick(&sweeper, &metered).await;
@@ -256,6 +258,7 @@ async fn run() {
                 .await;
             let ended = sweeper.rooms.sweep(now);
             meetings::spawn_end(&sweeper, ended);
+            meetings::spawn_end_now(&sweeper, host_ended);
             sweeper.auth.sweep();
         }
     });

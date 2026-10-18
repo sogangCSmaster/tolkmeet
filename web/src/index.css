@@ -10,8 +10,10 @@ button:disabled { cursor: not-allowed; }
 h1, h2 { font-weight: 600; margin: 0; }
 h1 { text-wrap: balance; }
 .lead { text-wrap: pretty; }
-/* 한국어는 어절 단위로 줄바꿈. 일본어 등 띄어쓰기 없는 언어에는 적용하면 안 되므로 lang으로 한정한다. */
-:lang(ko) :is(h1, h2, .lead, .feed-empty) { word-break: keep-all; }
+/* 한국어는 어절 단위로 줄바꿈한다. 좁은 칸에서 "듣/는/중"처럼 한 글자씩 쪼개지거나 한 글자만 다음 줄로 떨어지지 않게.
+   어절이 칸보다 길 때만 그 안에서 끊는다. word-break는 상속되므로 띄어쓰기 없는 일본어·중국어는 기본 동작으로 되돌린다. */
+:lang(ko) { word-break: keep-all; overflow-wrap: break-word; }
+:lang(ja), :lang(zh) { word-break: normal; }
 /* 일본어는 지원 브라우저(Chrome 119+)에서 문절 단위로 줄바꿈. 미지원 브라우저는 기본 동작. */
 :lang(ja) :is(h1, h2) { word-break: auto-phrase; }
 .icon { width: 1em; height: 1em; font-size: 24px; flex: none; fill: currentColor; display: inline-block; vertical-align: middle; }
@@ -146,24 +148,28 @@ h1 { text-wrap: balance; }
 .start-card .brand-mark rect:first-child { fill: #F5F5F7; }
 .start-card h2 { margin-top: var(--space-2); font-size: clamp(26px, 3vw, 34px); line-height: 1.15; letter-spacing: -0.02em; }
 .start-card p { margin: 0 0 var(--space-3); max-width: 420px; color: var(--on-stage-muted); font-size: var(--text-md); line-height: 1.55; }
-.device-card { display: flex; flex-direction: column; gap: var(--space-4); padding: 28px; border-radius: 28px; background: var(--panel-bg); }
-.device-card h2 { font-size: var(--text-lg); }
-.device-options { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
-.device-option { display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-end; gap: 2px; min-height: 150px; padding: var(--space-4); border-radius: 18px; background: var(--page-bg); text-align: left; transition: background var(--duration), transform var(--duration); }
-.device-option:hover:not(:disabled) { background: var(--fill); transform: translateY(-2px); }
-.device-option:disabled { opacity: .6; }
-.device-option .icon { margin-bottom: auto; font-size: 26px; color: var(--accent); }
-.device-option b { font-size: var(--text-md); }
-.device-option span { font-size: var(--text-sm); color: var(--text-secondary); line-height: 1.45; }
+.mode-card h2 { margin-top: 0; }
+.mode-options { width: 100%; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); }
+.mode-option { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-height: 148px; padding: var(--space-4); border-radius: 18px; background: rgba(255, 255, 255, .08); color: var(--on-stage); text-align: left; transition: background var(--duration), transform var(--duration); }
+.mode-option:hover:not(:disabled) { background: rgba(255, 255, 255, .14); transform: translateY(-2px); }
+.mode-option:disabled { opacity: .6; }
+.mode-option .icon { margin-bottom: auto; font-size: 28px; color: #FF8A66; }
+.mode-option b { font-size: var(--text-md); }
+.mode-option span { font-size: var(--text-sm); color: var(--on-stage-muted); line-height: 1.45; }
+@media (max-width: 560px) {
+  .mode-options { grid-template-columns: minmax(0, 1fr); }
+  .mode-option { min-height: 0; flex-direction: row; align-items: center; flex-wrap: wrap; column-gap: var(--space-3); }
+  .mode-option .icon { margin-bottom: 0; }
+  .mode-option span { flex-basis: 100%; padding-left: 40px; }
+}
 @media (max-width: 860px) {
   .host-grid { grid-template-columns: minmax(0, 1fr); }
   .host-top .join-form { width: 100%; }
 }
 @media (max-width: 480px) {
   .host-home { padding: var(--space-4) var(--space-4) var(--space-6); }
-  .start-card, .device-card { padding: var(--space-5); border-radius: 22px; }
+  .start-card { padding: var(--space-5); border-radius: 22px; }
   .start-card .btn { width: 100%; }
-  .device-option { min-height: 120px; }
 }
 
 /* ── 공통 보조 ─────────────────────────────── */
@@ -373,6 +379,11 @@ body { background: var(--page-bg); color: var(--text); }
 .sheet { width: min(560px, calc(100% - 24px)); max-height: calc(100dvh - 32px); padding: 28px; border: 0; border-radius: 28px; background: var(--panel-bg); color: var(--text); box-shadow: 0 40px 80px -24px rgb(0 0 0 / .45); }
 .sheet::backdrop { background: rgb(0 0 0 / .4); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
 .sheet[open] { animation: sheet-in 200ms cubic-bezier(.2, .8, .2, 1); }
+.end-dialog { width: min(440px, calc(100% - 24px)); display: flex; flex-direction: column; gap: var(--space-3); }
+.end-dialog h2 { font-size: var(--text-xl); letter-spacing: -0.02em; }
+.end-dialog h2 { margin-bottom: 0; }
+.end-dialog .btn { white-space: normal; }
+.end-dialog .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--space-2); margin-top: var(--space-2); }
 @keyframes sheet-in { from { opacity: 0; transform: translateY(12px) scale(.98); } }
 @media (prefers-reduced-motion: reduce) { .sheet[open] { animation: none; } }
 .sheet > h2 { font-size: var(--text-xl); margin-bottom: var(--space-4); }
@@ -800,6 +811,8 @@ body { background: var(--page-bg); color: var(--text); }
   .capsule .ctl { width: 44px; height: 44px; }
   .capsule .ctl.leave { width: 56px; }
 }
+/* 세로 휴대폰에서 대화 기록을 닫으면 두 사람을 위아래로 크게(나란히 두면 타일이 작고 위아래가 빈다) */
+@media (max-width: 560px) and (orientation: portrait) { .room:not(.with-panel) .stage.count-2 { grid-template-columns: 1fr; } }
 @media (max-width: 760px) { .panel .entry.age-0 .tgt { font-size: calc(20px * var(--caption-scale, 1)); } }
 
 /* 대면 대화: 위(맞은편 사람, 180도 회전) 어두운 카드·아래(기기 주인) 밝은 카드, 가운데 얇은 막대 */
@@ -835,23 +848,24 @@ body { background: var(--page-bg); color: var(--text); }
 .talk-half.far .talk-button.on { background: var(--control-active-bg); color: var(--control-active-fg); }
 .talk-button:disabled { opacity: .5; }
 .talk-button .icon { font-size: 22px; }
-.talk-bar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); padding: 0 var(--space-2); color: var(--on-stage); }
+.talk-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px var(--space-2); padding: 0 var(--space-2); color: var(--on-stage); }
 .talk-bar .btn-text { color: var(--on-stage); }
 .talk-bar .btn-text:hover:not(:disabled) { background: var(--control-hover); }
 .talk-bar .icon-btn { color: var(--on-stage-muted); }
 .talk-bar .icon-btn:hover { background: var(--control-hover); color: var(--on-stage); }
 .talk-bar .btn-outline { height: 36px; background: var(--control-bg); color: var(--on-stage); }
 .talk-bar .btn-outline:hover:not(:disabled) { background: var(--control-hover); }
-.talk-bar-actions { display: flex; align-items: center; gap: var(--space-2); }
+.talk-bar-actions { display: flex; align-items: center; gap: var(--space-2); margin-left: auto; }
 
 /* 자막 화면: 위에는 상태와 조작만 작게, 자막은 아래에서 위로 쌓이며 방금 문장이 가장 크다. */
 .live { height: 100dvh; display: flex; flex-direction: column; background: var(--page-bg); }
-.live-bar { position: relative; display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-4) clamp(16px, 3vw, 40px); }
+/* 휴대폰에서 버튼(저장·다시 시도)이 늘어 한 줄에 다 안 들어가면 버튼 묶음이 다음 줄로 내려간다. 상태 글자를 쪼개지 않게. */
+.live-bar { position: relative; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2) var(--space-3); padding: var(--space-4) clamp(16px, 3vw, 40px); }
 .live-status { display: flex; align-items: center; gap: 10px; margin: 0; color: var(--text-secondary); font-size: var(--text-sm); font-weight: 500; }
 .live-status .levels { opacity: 1; height: 18px; }
 .live-status .levels i { background: var(--border); }
 .live-status .levels.on i { background: var(--brand-accent); }
-.live-actions { display: flex; align-items: center; gap: var(--space-1); }
+.live-actions { display: flex; align-items: center; gap: var(--space-1); margin-left: auto; }
 .live-actions .btn { margin-left: var(--space-2); height: 40px; border-radius: var(--radius-full); }
 /* 언어 설정: 톱니를 누르면 위 오른쪽에 펼쳐지는 카드 */
 .live-settings { position: absolute; top: calc(100% - var(--space-2)); right: clamp(16px, 3vw, 40px); z-index: 5; display: flex; align-items: center; gap: var(--space-2); padding: var(--space-3); border-radius: var(--radius-card); background: var(--panel-bg); color: var(--text-secondary); box-shadow: 0 12px 32px -12px rgb(0 0 0 / .25); }

@@ -7,4 +7,4 @@ export type ClientMsg = { "t": "join", room: string, name: string, lang: string,
 /**
  * 연결이 끊겼다 다시 들어올 때, 지난 `welcome`에서 받은 값. 맞으면 주최자 수락 없이 바로 입장한다.
  */
-resume?: string, } | { "t": "lang", lang: string, partner_lang: string, } | { "t": "media", media: MediaState, } | { "t": "signal", to: string, data: SignalData, } | { "t": "admit", id: string, } | { "t": "deny", id: string, } | { "t": "settings", settings: RoomSettings, } | { "t": "stt", seg: number, text: string, final: boolean, } | { "t": "stt_token", id: number, };
+resume?: string, } | { "t": "lang", lang: string, partner_lang: string, } | { "t": "media", media: MediaState, } | { "t": "signal", to: string, data: SignalData, } | { "t": "admit", id: string, } | { "t": "deny", id: string, } | { "t": "settings", settings: RoomSettings, } | { "t": "stt", seg: number, text: string, final: boolean, } | { "t": "stt_token", id: number, } | { "t": "leave" };

@@ -11,9 +11,17 @@ import { BrandMark } from './BrandMark'
 import { LoadBoundary } from './ErrorPages'
 import { Header } from './Header'
 import { Icon } from './Icon'
+import type { IconName } from './icons'
 import { UnpaidNotice } from './UnpaidNotice'
 
 type Kind = 'meeting' | 'inPerson' | 'live'
+
+/** 홈에서 바로 여는 세 가지 방식. 한 가지만 크게 보이면 나머지가 있는지 모르므로 같은 크기로 나란히 둔다. */
+const MODES: { kind: Kind; icon: IconName; label: MessageKey; body: MessageKey }[] = [
+  { kind: 'meeting', icon: 'video_call', label: 'home.modeMeeting', body: 'home.meetingShort' },
+  { kind: 'inPerson', icon: 'forum', label: 'newMeeting.inPerson', body: 'home.inPersonShort' },
+  { kind: 'live', icon: 'subtitles', label: 'newMeeting.live', body: 'home.liveShort' },
+]
 
 export function Home() {
   const auth = useAuth()
@@ -150,6 +158,22 @@ function HostHome({ user }: { user: User }) {
 
   const next = meetings?.upcoming[0]
   const noPlan = user.plan === 'none'
+  // 요금제가 없으면 누를 때 결제 화면으로 간다(create).
+  const modeCard = (
+    <section className="start-card mode-card" aria-labelledby="modes-title">
+      <h2 id="modes-title">{t('home.modesTitle')}</h2>
+      <p>{t(noPlan ? 'home.choosePlanFirst' : 'home.modesBody')}</p>
+      <div className="mode-options">
+        {MODES.map((m) => (
+          <button key={m.kind} className="mode-option" onClick={() => void create(m.kind)} disabled={!!creating}>
+            <Icon name={m.icon} />
+            <b>{creating === m.kind ? t('home.creating') : t(m.label)}</b>
+            <span>{t(m.body)}</span>
+          </button>
+        ))}
+      </div>
+    </section>
+  )
   return (
     <main className="host-home">
       <div className="host-top">
@@ -212,29 +236,9 @@ function HostHome({ user }: { user: User }) {
                 <BrandMark size={44} />
               </span>
             </section>
-          ) : (
-            <section className="start-card" aria-labelledby="start-title">
-              <BrandMark size={44} />
-              <h2 id="start-title">{t('home.startTitle')}</h2>
-              <p>{t('home.startBody')}</p>
-              <button className="btn btn-primary btn-lg" onClick={() => void create('meeting')} disabled={!!creating}>
-                <Icon name="video_call" />
-                {creating === 'meeting' ? t('home.creating') : t(noPlan ? 'home.choosePlanFirst' : 'home.startNow')}
-              </button>
-            </section>
-          )}
+          ) : null}
+          {modeCard}
           <div className="quick-tiles">
-            {next && (
-              <button className="quick-tile" onClick={() => void create('meeting')} disabled={!!creating}>
-                <span className="quick-icon accent" aria-hidden="true">
-                  <Icon name="video_call" />
-                </span>
-                <span>
-                  <b>{creating === 'meeting' ? t('home.creating') : t('home.startNow')}</b>
-                  <small>{t('home.startNowBody')}</small>
-                </span>
-              </button>
-            )}
             <button className="quick-tile" onClick={() => (noPlan ? navigate('/checkout') : setScheduling(true))}>
               <span className="quick-icon" aria-hidden="true">
                 <Icon name="calendar_month" />
@@ -290,21 +294,6 @@ function HostHome({ user }: { user: User }) {
           ) : (
             billing && billing.plan !== 'none' && <UsageRing billing={billing} />
           )}
-          <section className="device-card" aria-labelledby="device-title">
-            <h2 id="device-title">{t('home.onThisDevice')}</h2>
-            <div className="device-options">
-              <button className="device-option" onClick={() => void create('inPerson')} disabled={!!creating}>
-                <Icon name="forum" />
-                <b>{creating === 'inPerson' ? t('home.creating') : t('newMeeting.inPerson')}</b>
-                <span>{t('home.inPersonShort')}</span>
-              </button>
-              <button className="device-option" onClick={() => void create('live')} disabled={!!creating}>
-                <Icon name="subtitles" />
-                <b>{creating === 'live' ? t('home.creating') : t('newMeeting.live')}</b>
-                <span>{t('home.liveShort')}</span>
-              </button>
-            </div>
-          </section>
           {meetings && meetings.past.length > 0 && (
             <section className="list-card compact" aria-labelledby="past-title">
               <h2 id="past-title">{t('home.past')}</h2>
