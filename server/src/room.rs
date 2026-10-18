@@ -48,6 +48,13 @@ const HOST_TEXTLESS_TOKEN_BURST: f64 = 24.0;
 const STT_REFUND_BURST: f64 = 2.0;
 /// 번역 시간은 누군가 실제로 말한 뒤 이 시간까지만 센다(인원과 상관없이: 말없이 켜 둔 회의는 주최자의 시간을 쓰지 않는다).
 const SPEECH_ACTIVE: Duration = Duration::from_secs(90);
+/// 같은 사람의 음성 인식 글자가 이 간격 안에 이어 오면 그 사이를 말하는 중으로 본다(중간 결과는 말하는 동안 0.5초마다 온다).
+/// 둘째 이후 동시에 말한 사람의 시간을 더할 때만 쓴다. 마지막 글자 뒤로 꼬리를 붙이지 않아 번갈아 말하면 겹치지 않는다.
+/// 기본 시간처럼 화면이 보낸 글자를 믿는다(글자를 드물게 보내도록 고친 화면은 더한 시간을 피할 수 있다).
+const TALK_GAP: Duration = Duration::from_secs(3);
+/// 두 명 이상이 함께 말한 상태가 이만큼 이어져야 센다(이어지면 처음부터). 말을 넘겨받을 때 앞사람의 확정 글자가
+/// 늦게 와서(최대 `TALK_GAP`) 겹치는 것은 세지 않도록 `TALK_GAP`보다 길게 둔다.
+const OVERLAP_MIN: Duration = Duration::from_secs(4);
 /// 주최자 계정으로 들어온 사람이 이만큼 없으면 남은 사람의 음성 인식·번역을 멈춘다(주최자 없이 그의 시간을 계속 쓰지 않게).
 pub const HOST_AWAY: Duration = Duration::from_secs(10 * 60);
 
@@ -175,6 +182,12 @@ struct Room {
     /// 마지막으로 누군가 실제로 말한 때(음성 인식 글자가 도착함). 번역 시간은 이것으로 센다.
     /// 토큰 발급은 세지 않는다: 말하지 않아도 세션을 미리 열고 몇 분마다 바꾼다.
     used_at: Option<Instant>,
+    /// 참가자별로 말한 구간(나간 참가자 포함, 아직 정산하지 않은 것만). 두 명 이상 겹친 시간을 더 센다(`settle_overlap`).
+    talks: HashMap<PeerId, Talk>,
+    /// 겹친 시간을 여기까지 정산했다. 이보다 `TALK_GAP` 늦게 따라간다(그 사이 구간은 다음 글자가 와야 정해진다).
+    overlap_until: Instant,
+    /// 정산 경계까지 이어진 겹침(다음 정산에서 이어 잰다).
+    overlap: Option<Overlap>,
     /// 주최자 계정으로 들어온 사람이 모두 나간 때(방을 만든 뒤 아직 안 들어온 경우 포함). 있으면 None.
     host_left_at: Option<Instant>,
     /// 남은 사람에게 주최자가 없다고(`HostAway`) 알렸는지
@@ -185,6 +198,19 @@ struct Room {
     /// 예약 회의 방. 주최자보다 먼저 와서 기다리는 게스트가 있으면 지우지 않는다
     /// (늦는 주최자를 기다리던 사람에게 회의가 없어졌다고 알리지 않게).
     reserved: bool,
+}
+
+/// 한 참가자가 말한 구간들. `TALK_GAP` 안에 이어 온 글자 사이만 구간이 된다(외따로 온 글자는 길이 0).
+#[derive(Default)]
+struct Talk {
+    last: Option<Instant>,
+    spans: Vec<(Instant, Instant)>,
+}
+
+/// 이어지고 있는 겹침: 시작 시각과 `OVERLAP_MIN`을 채우기 전까지 쌓아 둔 초.
+struct Overlap {
+    since: Instant,
+    pending: f64,
 }
 
 struct Resume {
@@ -212,6 +238,9 @@ impl Room {
             metered_at: now,
             unreported: 0.0,
             used_at: None,
+            talks: HashMap::new(),
+            overlap_until: now,
+            overlap: None,
             host_left_at: Some(now),
             host_away_told: false,
             peak: 0,
@@ -222,9 +251,12 @@ impl Room {
 
     /// 지난 측정부터 지금까지를 쌓는다. 번역이 켜져 있을 때 마지막으로 말한 뒤 `SPEECH_ACTIVE`까지만 세고,
     /// 주최자가 `HOST_AWAY`보다 오래 없으면 그 뒤로는 세지 않는다.
+    /// 여기에 둘째 이후 동시에 말한 사람의 시간을 더한다(`settle_overlap`): n명이 함께 말하면 n배로 센다.
     /// `blocked`: 주최자의 번역 시간이 떨어져 자막을 막는 중이면 세지 않는다(쓴 시간을 부풀리지 않게).
     /// 세는 조건이 바뀌는 곳(입장·퇴장·설정·막힘)마다 바뀌기 전에 부른다.
     fn accrue(&mut self, now: Instant, blocked: bool) {
+        // 말한 구간은 자막을 만들 수 있을 때(번역 켜짐·막히지 않음·주최자 있음) 받은 글자로만 생기므로 조건 없이 정산한다.
+        self.unreported += self.settle_overlap(now);
         let from = std::mem::replace(&mut self.metered_at, now);
         if blocked || !self.settings.translation || self.members.is_empty() {
             return;
@@ -235,6 +267,64 @@ impl Room {
             until = until.min(left + HOST_AWAY);
         }
         self.unreported += until.saturating_duration_since(from).as_secs_f64();
+    }
+
+    /// 이 참가자가 `now`에 말한 글자를 보냈다. 직전 글자와 `TALK_GAP` 안이면 그 사이를 말한 구간으로 둔다.
+    fn talked(&mut self, id: &str, now: Instant) {
+        let talk = self.talks.entry(id.to_owned()).or_default();
+        if let Some(last) = talk.last.filter(|&l| now > l && now - l <= TALK_GAP) {
+            match talk.spans.last_mut() {
+                Some(span) if span.1 == last => span.1 = now,
+                _ => talk.spans.push((last, now)),
+            }
+        }
+        talk.last = Some(now);
+    }
+
+    /// 지난 정산부터 `now - TALK_GAP`까지 두 명 이상이 함께 말한 시간을 (인원 - 1)배로 더한 초(`OVERLAP_MIN` 넘게 이어진 것만).
+    /// 그 뒤는 아직 정하지 않는다: 지금 이후에 오는 글자는 직전 글자부터 구간을 만드는데, 그 시작은 `now - TALK_GAP`보다 늦다.
+    fn settle_overlap(&mut self, now: Instant) -> f64 {
+        let from = self.overlap_until;
+        let Some(upto) = now.checked_sub(TALK_GAP).filter(|&u| u > from) else {
+            return 0.0;
+        };
+        self.overlap_until = upto;
+        let mut edges: Vec<(Instant, i32)> = Vec::new();
+        for talk in self.talks.values() {
+            for &(start, end) in &talk.spans {
+                let (start, end) = (start.max(from), end.min(upto));
+                if start < end {
+                    edges.push((start, 1));
+                    edges.push((end, -1));
+                }
+            }
+        }
+        // 같은 시각이면 끝(-1)이 시작(+1)보다 앞선다: 한 사람이 멈춘 순간 다른 사람이 시작하면 겹치지 않는다.
+        edges.sort_unstable();
+        // 마지막 구간 끝부터 `upto`까지(아무도 말하지 않음)도 지나가야 끝난 겹침을 버린다.
+        edges.push((upto, 0));
+        let (mut talking, mut prev, mut extra) = (0i32, from, 0.0);
+        for (at, delta) in edges {
+            if at > prev {
+                if talking > 1 {
+                    let run = self.overlap.get_or_insert(Overlap { since: prev, pending: 0.0 });
+                    run.pending += f64::from(talking - 1) * (at - prev).as_secs_f64();
+                    if at - run.since >= OVERLAP_MIN {
+                        extra += std::mem::take(&mut run.pending);
+                    }
+                } else {
+                    self.overlap = None;
+                }
+            }
+            talking += delta;
+            prev = at;
+        }
+        self.talks.retain(|_, talk| {
+            talk.spans.retain(|span| span.1 > upto);
+            // 마지막 글자가 `upto`보다 앞이면 다음 글자와 이어질 수 없다.
+            !talk.spans.is_empty() || talk.last.is_some_and(|l| l >= upto)
+        });
+        extra
     }
 
     /// 남은 사람에게 주최자가 없다고 한 번 알린다(`except`는 이미 따로 알린 참가자). 알린 뒤 돌아오면 `HostBack`을 보낸다.
@@ -428,7 +518,7 @@ impl Rooms {
         }
     }
 
-    /// 번역 시간을 잰다(주기 작업). 번역이 켜져 있고 누군가 말하는 동안 센다(`Room::accrue`).
+    /// 번역 시간을 잰다(주기 작업). 번역이 켜져 있고 누군가 말하는 동안 세고, 함께 말한 사람 수만큼 곱한다(`Room::accrue`).
     /// 1초 미만은 다음 측정으로 넘긴다. 주최자가 `HOST_AWAY`보다 오래 없는 방에는 그때 한 번 알린다.
     pub fn meter(&self, now: Instant) -> Vec<Metered> {
         let blocked = self.out_of_time_hosts();
@@ -880,6 +970,7 @@ impl Rooms {
             // 한동안 말이 없다가 다시 말하면 그 사이(쓰지 않은 시간)는 세지 않도록 먼저 잰다.
             room.accrue(now, false);
             room.used_at = Some(now);
+            room.talked(speaker, now);
             if let Some(m) = room.members.get_mut(speaker) {
                 m.stt_tokens.spoke();
             }
@@ -1092,6 +1183,64 @@ mod tests {
         assert_eq!(billed(&rooms, t0 + secs(120)), 59);
         assert_eq!(billed(&rooms, t0 + secs(300)), 61 + SPEECH_ACTIVE.as_secs() as i64 - 120);
         assert_eq!(billed(&rooms, t0 + secs(400)), 0);
+    }
+
+    /// `from`초부터 `to`초까지 1초마다 `ids`가 모두 말한 글자를 보낸다.
+    fn speak(rooms: &Rooms, code: &str, ids: &[&PeerId], t0: Instant, from: u64, to: u64) {
+        for t in from..=to {
+            for id in ids {
+                assert!(rooms.speech_audience(code, id, t0 + secs(t)).is_some());
+            }
+        }
+    }
+
+    /// 말하는 중간(30초)과 다 끝난 뒤에 재서 더한다(정산이 측정 경계를 넘어도 같아야 한다).
+    fn billed_after(rooms: &Rooms, t0: Instant, talk: impl Fn(u64, u64)) -> i64 {
+        talk(0, 30);
+        let mid = billed(rooms, t0 + secs(30));
+        talk(31, 200);
+        mid + billed(rooms, t0 + secs(1000))
+    }
+
+    #[test]
+    fn concurrent_speakers_are_billed_per_speaker_but_turns_are_not() {
+        let tail = SPEECH_ACTIVE.as_secs() as i64;
+        let (rooms, code, host_id, _host, _, _guest, _) = room_with_admitted_guest();
+        let t0 = Instant::now();
+        let alone = billed_after(&rooms, t0, |a, b| {
+            if a <= 60 {
+                speak(&rooms, &code, &[&host_id], t0, a, b.min(60));
+            }
+        });
+        assert_eq!(alone, 60 + tail, "one person for a minute: a minute");
+
+        let (rooms, code, host_id, _host, guest_id, _guest, _) = room_with_admitted_guest();
+        let t0 = Instant::now();
+        let together = billed_after(&rooms, t0, |a, b| {
+            if a <= 60 {
+                speak(&rooms, &code, &[&host_id, &guest_id], t0, a, b.min(60));
+            }
+        });
+        assert_eq!(together, 120 + tail, "two people at once for a minute: two minutes");
+
+        // 주최자가 1분 말하고 게스트가 바로 이어서 1분 말한다. 주최자의 확정 글자가 2.6초 늦게 와서 겹쳐도 세지 않는다.
+        let (rooms, code, host_id, _host, guest_id, _guest, _) = room_with_admitted_guest();
+        let t0 = Instant::now();
+        let turns = billed_after(&rooms, t0, |a, b| {
+            for t in a..=b.min(120) {
+                if t <= 60 {
+                    speak(&rooms, &code, &[&host_id], t0, t, t);
+                }
+                if t == 63 {
+                    let late_final = t0 + Duration::from_millis(62_600);
+                    assert!(rooms.speech_audience(&code, &host_id, late_final).is_some());
+                }
+                if t >= 60 {
+                    speak(&rooms, &code, &[&guest_id], t0, t, t);
+                }
+            }
+        });
+        assert_eq!(turns, 120 + tail, "a minute each in turn: two minutes");
     }
 
     #[test]
