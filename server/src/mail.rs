@@ -1,4 +1,5 @@
-//! 메일 발송. `RESEND_API_KEY`가 있으면 Resend HTTP API로 보내고, 없으면 보내지 않는다.
+//! 메일 발송. `CLOUDFLARE_ACCOUNT_ID`와 `CLOUDFLARE_EMAIL_TOKEN`이 있으면 Cloudflare Email Sending REST API로 보내고,
+//! 없으면 보내지 않는다.
 //! 개발 모드에서는 키가 없을 때 `data/mail/`에 파일로 남겨 가입·재설정 흐름을 직접 확인할 수 있게 한다.
 //! 메일 본문(인증 코드·재설정 링크)은 로그에 남기지 않는다.
 
@@ -14,9 +15,11 @@ pub struct Mailer {
 
 #[derive(Clone)]
 enum Mode {
-    Resend {
+    Cloudflare {
         client: reqwest::Client,
-        key: String,
+        /// `.../accounts/{account_id}/email/sending/send`
+        url: String,
+        token: String,
     },
     /// 개발용: 파일로 떨어뜨린다.
     Folder(PathBuf),
@@ -32,21 +35,25 @@ pub struct Message {
 
 impl Mailer {
     pub fn from_env(dev_folder: Option<PathBuf>) -> Self {
-        let from = std::env::var("MAIL_FROM")
-            .unwrap_or_else(|_| "Tolkmeet <no-reply@mail.tolkmeet.com>".into());
-        let mode = match std::env::var("RESEND_API_KEY") {
-            Ok(key) if !key.trim().is_empty() => Mode::Resend {
+        // Cloudflare에 등록(Onboard)한 도메인의 주소여야 한다.
+        let from = std::env::var("MAIL_FROM").unwrap_or_else(|_| "Tolkmeet <no-reply@tolkmeet.com>".into());
+        let var = |k: &str| std::env::var(k).ok().map(|v| v.trim().to_owned()).filter(|v| !v.is_empty());
+        // 계정 id는 주소에 그대로 들어가므로 영숫자만 받는다.
+        let account = var("CLOUDFLARE_ACCOUNT_ID").filter(|a| a.bytes().all(|b| b.is_ascii_alphanumeric()));
+        let mode = match (account, var("CLOUDFLARE_EMAIL_TOKEN")) {
+            (Some(account), Some(token)) => Mode::Cloudflare {
                 client: reqwest::Client::new(),
-                key: key.trim().to_owned(),
+                url: format!("https://api.cloudflare.com/client/v4/accounts/{account}/email/sending/send"),
+                token,
             },
             _ => match dev_folder {
                 Some(dir) => {
-                    tracing::warn!(dir = %dir.display(), "RESEND_API_KEY is not set: dev mode writes mail to files");
+                    tracing::warn!(dir = %dir.display(), "CLOUDFLARE_ACCOUNT_ID/CLOUDFLARE_EMAIL_TOKEN not set: dev mode writes mail to files");
                     Mode::Folder(dir)
                 }
                 None => {
                     tracing::warn!(
-                        "RESEND_API_KEY is not set: emails (verification, password reset) are not sent"
+                        "CLOUDFLARE_ACCOUNT_ID/CLOUDFLARE_EMAIL_TOKEN not set: emails (verification, password reset) are not sent"
                     );
                     Mode::Off
                 }
@@ -75,13 +82,13 @@ impl Mailer {
 
     async fn deliver(&self, msg: &Message) -> Result<(), String> {
         match &self.mode {
-            Mode::Resend { client, key } => {
+            Mode::Cloudflare { client, url, token } => {
                 let res = client
-                    .post("https://api.resend.com/emails")
-                    .bearer_auth(key)
+                    .post(url)
+                    .bearer_auth(token)
                     .json(&json!({
-                        "from": self.from,
-                        "to": [msg.to],
+                        "from": sender(&self.from),
+                        "to": msg.to,
                         "subject": msg.subject,
                         "html": msg.html,
                         "text": msg.text,
@@ -90,11 +97,16 @@ impl Mailer {
                     .send()
                     .await
                     .map_err(|e| e.to_string())?;
-                if res.status().is_success() {
-                    Ok(())
-                } else {
-                    Err(format!("resend status {}", res.status()))
+                let status = res.status();
+                let body: serde_json::Value = res.json().await.unwrap_or_default();
+                // 실패 이유는 Cloudflare 오류 코드·문구만 남긴다(받는 주소는 남기지 않는다).
+                if !status.is_success() || body["success"] != true {
+                    return Err(format!("cloudflare email status {status}: {}", body["errors"]));
                 }
+                if body["result"]["permanent_bounces"].as_array().is_some_and(|a| !a.is_empty()) {
+                    return Err("cloudflare email: permanent bounce".into());
+                }
+                Ok(())
             }
             Mode::Folder(dir) => {
                 tokio::fs::create_dir_all(dir)
@@ -123,6 +135,17 @@ impl Mailer {
             }
             Mode::Off => Err("mail is not configured".into()),
         }
+    }
+}
+
+/// `MAIL_FROM`("이름 <주소>" 또는 주소만)을 Cloudflare가 받는 모양으로(이름이 있으면 {address, name}).
+fn sender(from: &str) -> serde_json::Value {
+    match from.trim().strip_suffix('>').and_then(|s| s.rsplit_once('<')) {
+        Some((name, address)) if !name.trim().is_empty() => {
+            json!({ "address": address.trim(), "name": name.trim().trim_matches('"') })
+        }
+        Some((_, address)) => json!(address.trim()),
+        None => json!(from.trim()),
     }
 }
 
@@ -209,13 +232,13 @@ impl Copy {
     fn footer(&self) -> &'static str {
         match self.lang {
             Lang::Ko => {
-                "이 메일은 no-reply@mail.tolkmeet.com에서 보냈습니다. 요청하지 않았다면 무시하셔도 됩니다."
+                "이 메일은 no-reply@tolkmeet.com에서 보냈습니다. 요청하지 않았다면 무시하셔도 됩니다."
             }
             Lang::Ja => {
-                "このメールは no-reply@mail.tolkmeet.com から送信されました。心当たりがない場合は無視してください。"
+                "このメールは no-reply@tolkmeet.com から送信されました。心当たりがない場合は無視してください。"
             }
             Lang::En => {
-                "Sent from no-reply@mail.tolkmeet.com. If you didn't request this, you can ignore it."
+                "Sent from no-reply@tolkmeet.com. If you didn't request this, you can ignore it."
             }
         }
     }
@@ -367,6 +390,17 @@ impl Copy {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sender_is_sent_in_the_shape_cloudflare_takes() {
+        assert_eq!(
+            sender("Tolkmeet <no-reply@tolkmeet.com>"),
+            serde_json::json!({ "address": "no-reply@tolkmeet.com", "name": "Tolkmeet" })
+        );
+        assert_eq!(sender("\"Tolk Meet\" <a@b.co>")["name"], "Tolk Meet");
+        assert_eq!(sender("no-reply@tolkmeet.com"), serde_json::json!("no-reply@tolkmeet.com"));
+        assert_eq!(sender("<a@b.co>"), serde_json::json!("a@b.co"));
+    }
+
     use super::*;
 
     #[test]

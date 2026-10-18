@@ -68,7 +68,7 @@ const toc: [string, string][] = [
   <p>Video and audio travel between participants with WebRTC encryption (DTLS-SRTP), either directly or, when a direct connection is not possible, through our own relay server in Seoul. The relay forwards encrypted data and cannot decrypt, see or record it.</p>
 
   <h2 id="p6">Who we share data with</h2>
-  <p>We do not sell personal data. Paddle.com Market Limited is the Merchant of Record for all our orders. For payments it acts as an independent controller, not on our behalf: when you open checkout we send it your email address, an internal user ID and the plan, and it collects your name, country and payment details directly from you under its own privacy policy. Google, Amazon Web Services and Resend are our processors and handle data only on our instructions. Before you pay, we ask for your separate consent to provide these items to Paddle and to transfer them to the United Kingdom; without it you can’t pay, but you can still join meetings as a guest.</p>
+  <p>We do not sell personal data. Paddle.com Market Limited is the Merchant of Record for all our orders. For payments it acts as an independent controller, not on our behalf: when you open checkout we send it your email address, an internal user ID and the plan, and it collects your name, country and payment details directly from you under its own privacy policy. Google, Amazon Web Services and Cloudflare are our processors and handle data only on our instructions. Before you pay, we ask for your separate consent to provide these items to Paddle and to transfer them to the United Kingdom; without it you can’t pay, but you can still join meetings as a guest.</p>
   <div class="legal-table" role="region" aria-label="Recipients" tabindex="0">
     <table>
       <thead><tr><th scope="col">Recipient</th><th scope="col">Role</th><th scope="col">Country</th><th scope="col">What they do</th><th scope="col">Data</th></tr></thead>
@@ -76,14 +76,14 @@ const toc: [string, string][] = [
         <tr><th scope="row">Google LLC</th><td>Processor</td><td>The United States and other countries where Google operates</td><td>Speech recognition and translation (Gemini API); Google sign-in if you choose it; a connectivity check (STUN) when joining a meeting</td><td>Audio and text during a meeting; your Google identity; IP address</td></tr>
         <tr><th scope="row">Paddle.com Market Limited</th><td>Independent controller (Merchant of Record)</td><td>United Kingdom</td><td>Payments, invoices, sales tax and VAT, refunds</td><td>Email address, internal user ID, plan; name, country and payment details you enter directly with Paddle</td></tr>
         <tr><th scope="row">Amazon Web Services</th><td>Processor</td><td>Republic of Korea (Seoul)</td><td>Hosting and encrypted backups</td><td>All data we store</td></tr>
-        <tr><th scope="row">Resend, Inc.</th><td>Processor</td><td>United States</td><td>Account and invitation emails</td><td>Email address and email content</td></tr>
+        <tr><th scope="row">Cloudflare, Inc.</th><td>Processor</td><td>United States and other countries where its network operates</td><td>Account and invitation emails</td><td>Email address and email content</td></tr>
       </tbody>
     </table>
   </div>
   <p>We may also share data with professional advisers (such as lawyers and accountants) and with authorities where the law requires it.</p>
 
   <h2 id="p7">International transfers</h2>
-  <p>Our servers are in Seoul, Republic of Korea (Amazon Web Services, ap-northeast-2). Google processes data in the United States and other countries where it operates, Resend in the United States and Paddle in the United Kingdom, as listed above. Data is transferred when you use the service, over encrypted connections (TLS). Where the law requires it, we rely on appropriate safeguards such as standard contractual clauses or an adequacy decision.</p>
+  <p>Our servers are in Seoul, Republic of Korea (Amazon Web Services, ap-northeast-2). Google processes data in the United States and other countries where it operates, Cloudflare in the United States and other countries where its network operates, and Paddle in the United Kingdom, as listed above. Data is transferred when you use the service, over encrypted connections (TLS). Where the law requires it, we rely on appropriate safeguards such as standard contractual clauses or an adequacy decision.</p>
 
   <h2 id="p8">Cookies</h2>
   <p>We set only essential cookies:</p>
@@ -102,7 +102,7 @@ const toc: [string, string][] = [
     <li>Sign-in sessions expire after 30 days.</li>
     <li>Billing records are kept by Paddle as long as tax law requires.</li>
     <li>Server logs (web server, app and relay server, including IP addresses) are kept up to 14 days.</li>
-    <li>Audio, transcripts and translations are not stored by us. Google handles them under its API terms; Resend keeps delivery logs under its own policy.</li>
+    <li>Audio, transcripts and translations are not stored by us. Google handles them under its API terms; Cloudflare keeps email delivery logs under its own policy.</li>
   </ul>
 
   <h2 id="p10">Your rights</h2>
