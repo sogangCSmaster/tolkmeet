@@ -7,13 +7,41 @@ web/.vite/
 .dev/
 shots/
 
-# ── 비밀정보·로컬 설정 (예시 파일만 커밋) ──
+# ── 비밀정보·로컬 설정 (예시·템플릿만 커밋) ──
+# 어느 폴더에 있든 막는다(슬래시 없는 패턴은 모든 깊이에 적용된다).
+# .env.op처럼 1Password 참조만 든 파일도, op inject로 값을 채운 .env.*.local도 모두 여기서 막힌다.
 .env
 .env.*
 !.env.example
+*.local
+*.secret
+*.secrets
+secrets/
+secrets.env
+!deploy/secrets.env.tpl
+# 키·인증서·서명 파일
 *.pem
 *.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa*
+id_ed25519*
+# 클라우드·서비스 계정 자격 증명
+*credentials*.json
+service-account*.json
+*-sa.json
+.npmrc
+.netrc
+# 로컬 MCP 설정(인증 헤더가 들어갈 수 있다)
+.mcp.json
+# 개발용 주최자 계정 비밀번호(dev 모드가 만든다)
 server/.dev-host-password
+# 브라우저 네트워크 기록(쿠키·토큰이 들어 있다), Playwright 결과
+*.har
+test-results/
+playwright-report/
 # SQLite 데이터(계정·세션·회의). 운영 데이터는 Litestream으로 S3에 백업한다
 *.db
 *.db-wal
