@@ -155,18 +155,19 @@ const jsonLd = [
       <div class="engine-cards">
         <div class="speed-card">
           <div>
-            <p class="eyebrow eyebrow-dark">{t.speedEyebrow}</p>
+            <p class="eyebrow">{t.speedEyebrow}</p>
             <p class="speed-title">{t.speedTitle}</p>
-            <p class="speed-body">{t.speedBody}</p>
+            <p class="body-17">{t.speedBody}</p>
           </div>
-          <div class="speed-rows" aria-hidden="true">
+          {/* 말하는 동안 번역이 흐린 글씨로 따라오다 확정되는 세 단계(그림이라 읽기 도구에는 숨긴다) */}
+          <ol class="stream" aria-hidden="true">
             {t.speedRows.map(([label, text], i) => (
-              <div class={`sr sr-${i}`}>
-                <span class="sr-label">{label}</span>
-                <span class="sr-text" lang={i === 0 ? t.speedSrcLang : t.lang}>{i > 0 && <i></i>}{text}</span>
-              </div>
+              <li class={`st st-${i}`}>
+                <span class="st-label">{label}</span>
+                <span class="st-text" lang={i === 0 ? t.speedSrcLang : t.lang}>{i === 2 && <i></i>}{text}</span>
+              </li>
             ))}
-          </div>
+          </ol>
         </div>
         <div class="context-card">
           <div>
