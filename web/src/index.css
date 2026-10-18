@@ -700,16 +700,23 @@ body { background: var(--page-bg); color: var(--text); }
 .icon-btn.on { background: var(--fill); color: var(--text); }
 .panel-settings { display: grid; gap: var(--space-3); padding: var(--space-2) var(--space-5) var(--space-4); border-bottom: 1px solid var(--divider); }
 .feed-wrap { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.feed { flex: 1; min-height: 0; overflow-y: auto; padding: var(--space-2) var(--space-5) var(--space-6); }
+.feed { flex: 1; min-height: 0; overflow-y: auto; padding: var(--space-2) var(--space-5) var(--space-6); display: flex; flex-direction: column; }
+/* 줄이 적을 때도 아래(최신 쪽)에 붙어 위가 비게 한다(자막 화면·대면 대화와 같은 방식). 빈 안내는 가운데. */
+.feed > :first-child { margin-top: auto; }
+.feed > .feed-empty { margin-block: auto; }
 /* 패널이 낮으면(휴대폰에서 설정을 펼친 때) 대화가 0으로 접혀 안내 위에 겹치지 않게 자리를 지키고, 대신 패널 전체가 스크롤된다. */
 .feed-wrap, .panel > .feed { min-height: 128px; }
 .stt-status { display: flex; gap: var(--space-2); align-items: flex-start; margin: 0; padding: var(--space-3) var(--space-5); border-bottom: 1px solid var(--divider); color: var(--text-secondary); font-size: var(--text-sm); line-height: 1.5; }
 .stt-status .icon { font-size: 18px; margin-top: 1px; }
-.panel-note { margin: 0; padding: var(--space-3) var(--space-5); border-top: 1px solid var(--divider); color: var(--text-secondary); font-size: var(--text-xs); line-height: 1.5; }
+.panel-note { margin: 0; padding: var(--space-3) var(--space-5); border-top: 1px solid var(--divider); color: var(--text-secondary); font-size: var(--text-xs); line-height: 1.5; text-wrap: balance; }
 .feed-empty { color: var(--text-secondary); text-align: center; margin: var(--space-6) var(--space-4); line-height: 1.6; }
 /* 최신순 크기: 방금 문장이 가장 크고 진하며, 지난 문장일수록 작고 흐려진다. 원문은 작은 회색. */
 .panel .entry { border-bottom: 0; padding: var(--space-2) 0; transition: opacity var(--duration); }
 .panel .entry .meta { margin-bottom: 2px; }
+.panel .entry p + p { margin-top: 4px; }
+/* 번역 막대를 왼쪽 여백에 걸어 이름·원문·번역 글자의 왼쪽 끝을 맞춘다(막대는 여백 20px 안에 머문다). */
+.panel .entry .tr-mark { padding-left: 0; }
+.panel .entry .tr-mark::before { left: max(-.8em, -16px); width: min(.46em, 10px); }
 .panel .entry .src { font-size: 13px; color: var(--text-secondary); }
 .panel .entry .tgt { font-size: calc(15px * var(--caption-scale, 1)); font-weight: 600; letter-spacing: -0.01em; line-height: 1.4; }
 .panel .entry.age-0 .tgt { font-size: calc(24px * var(--caption-scale, 1)); font-weight: 700; line-height: 1.3; }
@@ -803,7 +810,8 @@ body { background: var(--page-bg); color: var(--text); }
   .room-main { flex-direction: column; gap: var(--space-3); padding: var(--space-3) var(--space-3) calc(var(--control-size) + 16px + var(--space-3) * 2); }
   .room-meta { top: var(--space-3); left: var(--space-4); font-size: var(--text-xs); }
   .room.with-panel { --panel-space: 0px; }
-  .stage { --stage-pb: 0px; flex: none; padding: 22px 0 0; }
+  /* 위 줄(시각·코드·언어 알약 28px)과 타일이 겹치지 않게 그 높이 + 8px만큼 비운다 */
+  .stage { --stage-pb: 0px; flex: none; padding: 36px 0 0; }
   .room:not(.with-panel) .stage { flex: 1; }
   .stage.count-1 { grid-template-columns: 1fr; }
   /* 좁은 화면은 무대 높이가 내용을 따르므로(크기 단위를 쓸 수 없음) 내 화면 아래에 카드를 놓는다. */
@@ -822,7 +830,17 @@ body { background: var(--page-bg); color: var(--text); }
 }
 /* 세로 휴대폰에서 대화 기록을 닫으면 두 사람을 위아래로 크게(나란히 두면 타일이 작고 위아래가 빈다) */
 @media (max-width: 560px) and (orientation: portrait) { .room:not(.with-panel) .stage.count-2 { grid-template-columns: 1fr; } }
-@media (max-width: 760px) { .panel .entry.age-0 .tgt { font-size: calc(20px * var(--caption-scale, 1)); } }
+@media (max-width: 760px) {
+  .panel .entry.age-0 .tgt { font-size: calc(20px * var(--caption-scale, 1)); }
+  /* 휴대폰에서 혼자이고 대화 기록이 열려 있으면 내 화면은 왼쪽에 작게, 초대 카드는 오른쪽에 나란히 두어 기록에 자리를 더 준다. */
+  .room.with-panel .stage.alone { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); }
+  .room.with-panel .stage.alone .tile { aspect-ratio: auto; min-height: 120px; }
+  .room.with-panel .stage.alone .invite { justify-content: center; gap: var(--space-3); }
+  .room.with-panel .stage.alone .invite h2 { padding-right: 28px; font-size: var(--text-md); }
+  /* 초대 카드를 닫으면 내 화면만 가운데 작게 */
+  .room.with-panel .stage.alone .tile:only-child { grid-column: 1 / -1; justify-self: center; width: min(100%, 240px); aspect-ratio: 16 / 9; min-height: 0; }
+  .panel-note { padding: var(--space-2) var(--space-5); font-size: 11px; }
+}
 
 /* 대면 대화: 위(맞은편 사람, 180도 회전) 어두운 카드·아래(기기 주인) 밝은 카드, 가운데 얇은 막대 */
 .talk { height: 100dvh; display: grid; grid-template-rows: 1fr auto 1fr; gap: 6px; padding: 6px; background: #000; }

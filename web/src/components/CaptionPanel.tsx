@@ -94,7 +94,7 @@ export function CaptionPanel({
           )}
           <Feed captions={captions} speakerName={speakerName} />
           {/* 저장 기능을 모든 참가자에게 알린다(자막은 서버에 남지 않고, 각자 자기 화면의 것만 저장한다). */}
-          <p className="panel-note">{t('captions.saveNotice')}</p>
+          <p className="panel-note">{t('captions.saveNoticeShort')}</p>
         </>
       ) : (
         <div className="feed">
