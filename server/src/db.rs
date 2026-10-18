@@ -225,7 +225,14 @@ const MIGRATIONS: &[&str] = &[
      ALTER TABLE users ADD COLUMN day_until INTEGER;
      ALTER TABLE usage ADD COLUMN from_day INTEGER NOT NULL DEFAULT 0;",
     // 13: 지금 남은 일일권 시간이 시작된 때(그때부터 산 일일권들이 합쳐져 있다). 환불이 끝난 다른 일일권의 시간을 건드리지 않게.
-    "ALTER TABLE users ADD COLUMN day_since INTEGER;",
+    "ALTER TABLE users ADD COLUMN day_since INTEGER;
+     UPDATE users SET day_since = day_until - 86400 WHERE day_until IS NOT NULL;",
+    // 14: 운영자가 장애 보상으로 표시한 결제. 그 결제의 환불은 요금제를 유지하고 비율만큼만 시간을 뺀다.
+    //     Paddle 조정 사유는 고객이 쓴 글이 들어갈 수 있어 믿지 않는다. 표시는 환불하기 전에 운영자가 DB에 넣는다.
+    "CREATE TABLE outage_credits (
+         transaction_id TEXT PRIMARY KEY,
+         created_at INTEGER NOT NULL
+     );",
 ];
 
 impl Db {

@@ -402,7 +402,6 @@ impl Billing {
             adjusted_transaction: text(&data["transaction_id"]),
             adjusted_full: data["type"].as_str() == Some("full"),
             adjusted_amount: minor(&data["totals"]["total"]).unwrap_or(0),
-            compensation: data["reason"].as_str().is_some_and(|r| r.trim_start().to_ascii_lowercase().starts_with("outage")),
         })
     }
 
@@ -521,8 +520,6 @@ struct Event {
     adjusted_transaction: Option<String>,
     adjusted_full: bool,
     adjusted_amount: i64,
-    /// 장애 보상 환불(조정 사유가 "outage"로 시작). 운영자가 Paddle에서 환불할 때 사유로 표시한다.
-    compensation: bool,
 }
 
 impl Event {
@@ -988,7 +985,14 @@ impl Event {
         )?;
         // 고객이 요청한 환불은 금액과 상관없이 그 결제로 받은 이용을 끝낸다(환불 정책: 쓴 시간과 결제 처리 비용을 뺀
         // 나머지를 돌려주므로, 남은 시간을 계속 쓰게 두면 그만큼 손해다). 장애 보상만 돌려준 비율만큼 다룬다.
-        let ends_use = !self.compensation;
+        // 운영자가 미리 장애 보상으로 표시한 결제(`outage_credits`)만 예외다. 차지백은 언제나 고객 쪽 회수다.
+        let compensation = self.action == "refund"
+            && tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM outage_credits WHERE transaction_id = ?1)",
+                params![txn],
+                |r| r.get::<_, bool>(0),
+            )?;
+        let ends_use = !compensation;
         // 추가 시간·일일권·차액으로 준 시간 중 돌려준 몫(누적)만큼 다시 뺀다(처음·갱신 결제의 시간은 요금제로 다룬다).
         let target = if ends_use || whole { seconds } else { seconds * refunded / total };
         let back = (target - seconds_back).max(0);
@@ -1011,7 +1015,7 @@ impl Event {
             tx.execute(
                 "UPDATE users SET day_seconds = MAX(0, day_seconds - ?2),
                    day_until = CASE WHEN day_seconds - ?2 <= 0 THEN MIN(COALESCE(day_until, 0), ?3) ELSE day_until END
-                 WHERE id = ?1 AND day_until > ?3 AND ?4 >= day_since",
+                 WHERE id = ?1 AND day_until > ?3 AND (day_since IS NULL OR ?4 >= day_since)",
                 params![user, back, now, period],
             )?;
         // 차지백은 언제나, 고객 환불은 지금 기간의 결제일 때만 요금제를 끝낸다(지난 기간 결제의 환불은 따로 낸 지금 기간을 끝내지 않는다).
@@ -1684,9 +1688,10 @@ mod tests {
     }
 
     /// 조정 웹훅. 대기 중인 환불은 만들 때(created), 승인은 상태가 바뀔 때(updated) 온다.
-    /// 장애 보상으로 표시한 조정(사유 "outage ...")
-    fn outage(mut v: Value) -> Value {
-        v["data"]["reason"] = json!("outage credit");
+    /// 운영자가 그 결제를 장애 보상으로 표시한다(`outage_credits`). 고객이 쓴 조정 사유는 믿지 않는다.
+    fn outage(db: &Db, txn: &'static str, v: Value) -> Value {
+        db.blocking(move |c| c.execute("INSERT OR IGNORE INTO outage_credits (transaction_id, created_at) VALUES (?1, 1)", params![txn]))
+            .unwrap();
         v
     }
 
@@ -1746,7 +1751,7 @@ mod tests {
         b.apply_event(&db, pass("d4", "txn_d4", now - 20)).await.unwrap();
         assert_eq!(day(), (2 * DAY_PASS_SECONDS, Some(now - 20 + DAY_PASS_LENGTH), "none".into()));
         // 장애 보상은 돌려준 비율만큼만 뺀다(1200 중 600 → 3시간 중 1.5시간).
-        b.apply_event(&db, outage(adjustment("r3", "adj_d4", "refund", "approved", "txn_d4", false, "600"))).await.unwrap();
+        b.apply_event(&db, outage(&db, "txn_d4", adjustment("r3", "adj_d4", "refund", "approved", "txn_d4", false, "600"))).await.unwrap();
         assert_eq!(day().0, 2 * DAY_PASS_SECONDS - DAY_PASS_SECONDS / 2);
         // 합쳐진 것 중 먼저 산 일일권을 고객 환불하면 그 시간도 지금 잔액에서 뺀다.
         b.apply_event(&db, adjustment("r4", "adj_d3", "refund", "approved", "txn_d3", false, "500")).await.unwrap();
@@ -1770,10 +1775,10 @@ mod tests {
             .unwrap();
         assert_eq!(row(&db, uid).extra, 5 * 3600);
         // 장애 보상: 승인 전에는 반영하지 않고, 승인되면 돌려준 몫(1500 중 600 → 5시간 중 2시간)만큼 뺀다. 같은 조정은 한 번만.
-        b.apply_event(&db, outage(adjustment("a1", "adj_1", "refund", "pending_approval", "txn_h", false, "600"))).await.unwrap();
+        b.apply_event(&db, outage(&db, "txn_h", adjustment("a1", "adj_1", "refund", "pending_approval", "txn_h", false, "600"))).await.unwrap();
         assert_eq!(row(&db, uid).extra, 5 * 3600);
-        b.apply_event(&db, outage(adjustment("a2", "adj_1", "refund", "approved", "txn_h", false, "600"))).await.unwrap();
-        b.apply_event(&db, outage(adjustment("a3", "adj_1", "refund", "approved", "txn_h", false, "600"))).await.unwrap();
+        b.apply_event(&db, outage(&db, "txn_h", adjustment("a2", "adj_1", "refund", "approved", "txn_h", false, "600"))).await.unwrap();
+        b.apply_event(&db, outage(&db, "txn_h", adjustment("a3", "adj_1", "refund", "approved", "txn_h", false, "600"))).await.unwrap();
         assert_eq!(row(&db, uid).extra, 3 * 3600);
         // 나머지를 모두 돌려주면 남은 3시간을 빼되, 이미 쓴 만큼은 0에서 멈춘다.
         db.blocking(|c| c.execute("UPDATE users SET extra_seconds = 3600 WHERE id = ?1", params![uid])).unwrap();
@@ -1796,7 +1801,7 @@ mod tests {
             .await
             .unwrap();
         // 장애 보상 일부 환불은 요금제를 그대로 둔다.
-        let partial = b.apply_event(&db, outage(adjustment("a1", "adj_1", "refund", "approved", "txn_s", false, "1000"))).await.unwrap();
+        let partial = b.apply_event(&db, outage(&db, "txn_s", adjustment("a1", "adj_1", "refund", "approved", "txn_s", false, "1000"))).await.unwrap();
         assert_eq!((partial.revoked, row(&db, uid).plan.as_str()), (None, "pro"));
         // 차지백(또는 전액 환불)이면 끝내고, 웹훅 처리기가 Paddle 구독을 바로 해지한다. 같은 조정이 다시 와도 한 번만.
         let charged_back = b.apply_event(&db, adjustment("a2", "adj_2", "chargeback", "approved", "txn_s", true, "2900")).await.unwrap();
@@ -1813,7 +1818,10 @@ mod tests {
             .await
             .unwrap();
         b.apply_event(&db, paid("t1", uid, &sig, "txn_1", "web", &[("pri_basic", 1, None)], OCT)).await.unwrap();
-        let out = b.apply_event(&db, adjustment("r1", "adj_1", "refund", "approved", "txn_1", false, "1100")).await.unwrap();
+        // 고객이 쓴 사유가 "outage"여도 운영자 표시가 없으면 고객 환불이다.
+        let mut customer = adjustment("r1", "adj_1", "refund", "approved", "txn_1", false, "1100");
+        customer["data"]["reason"] = json!("outage, please keep my plan");
+        let out = b.apply_event(&db, customer).await.unwrap();
         assert_eq!((out.revoked.as_deref(), row(&db, uid).plan.as_str()), (Some("sub_1"), "none"));
         // 추가 시간: 일부 환불이어도 그 구매의 시간을 모두 뺀다(0에서 멈춤).
         let (db, b, uid, sig) = fixture();
