@@ -142,22 +142,21 @@ a:hover { text-decoration: underline; }
 .gem-text { background: linear-gradient(90deg, #4285F4 0%, #9B72CB 50%, #D96570 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .engine-lead { margin: 20px auto 0; max-width: 640px; }
 .engine-cards { margin-top: 56px; display: flex; flex-wrap: wrap; gap: 16px; }
-/* 옆 카드와 같은 무게(밝은 회색 바탕, 같은 제목 크기). 흐름은 흰 패널 안의 세로 타임라인으로 보여 준다. */
-.speed-card { flex: 1.3 1 420px; box-sizing: border-box; border-radius: 30px; background: #F5F5F7; padding: 40px; display: flex; flex-direction: column; gap: 24px; }
-.speed-title { margin: 8px 0 0; font-size: clamp(30px, 3vw, 40px); line-height: 1.15; font-weight: 700; letter-spacing: -0.015em; }
-.stream { margin: auto 0 0; padding: 20px 22px; list-style: none; border-radius: 18px; background: #FFFFFF; display: flex; flex-direction: column; gap: 16px; }
-.st { position: relative; padding-left: 24px; display: flex; flex-direction: column; gap: 3px; }
-.st::before { content: ''; position: absolute; left: 0; top: 4px; width: 9px; height: 9px; border-radius: 50%; background: #D1D1D6; }
-.st:not(:last-child)::after { content: ''; position: absolute; left: 4px; top: 19px; bottom: -14px; width: 1px; background: #E5E5EA; }
-.st-1::before { background: #FFB8A3; }
-.st-2::before { background: #F2542D; box-shadow: 0 0 0 4px rgba(242,84,45,0.16); }
-.st-label { font-size: 12px; color: #6E6E73; }
-.st-text { font-size: 15px; line-height: 1.35; color: #6E6E73; display: flex; align-items: baseline; gap: 10px; }
-/* 중간 번역은 흐린 글씨(그림 속 글자라 본문 대비 규칙 대신 실제 화면의 모습을 따른다) */
-.st-1 .st-text { font-size: 17px; font-weight: 600; color: #A1A1A6; }
-.st-2 .st-text { align-items: flex-start; font-size: 22px; font-weight: 700; letter-spacing: -0.01em; color: #1D1D1F; }
-/* 두 줄로 넘어가도 표시는 첫 줄 가운데에 둔다 */
-.st-2 .st-text i { flex: none; margin-top: calc(0.675em - 2px); width: 12px; height: 4px; border-radius: 2px; background: #F2542D; }
+.speed-card { flex: 1.3 1 420px; box-sizing: border-box; border-radius: 30px; background: #000000; color: #F5F5F7; padding: 40px; display: flex; flex-direction: column; gap: 28px; overflow: hidden; }
+.speed-title { margin: 8px 0 0; font-size: clamp(52px, 5.6vw, 76px); line-height: 1.02; font-weight: 700; letter-spacing: -0.03em; }
+.speed-body { margin: 10px 0 0; font-size: 17px; line-height: 1.5; color: rgba(235,235,245,0.7); }
+.speed-rows { display: grid; grid-template-columns: minmax(72px, max-content) minmax(0, 1fr); align-items: center; gap: 10px 12px; font-size: 15px; }
+/* 이름표 칸은 가장 긴 이름표에 맞춘다(디자인의 72px보다 좁아지지 않게) */
+.sr { display: contents; }
+.sr-label { font-size: 12px; color: rgba(235,235,245,0.5); }
+.sr-text { display: flex; align-items: flex-start; gap: 8px; }
+.sr-text i { flex: none; margin-top: calc(.6em - 2px); border-radius: 2px; background: #F2542D; }
+.sr-0 .sr-text { color: rgba(235,235,245,0.7); }
+/* 중간 번역(흐린 글씨). 디자인은 .45인데 검은 바탕 4.5:1을 넘기려고 .5로 둔다. */
+.sr-1 .sr-text { color: rgba(245,245,247,0.5); font-weight: 600; }
+.sr-1 i { width: 10px; height: 3px; opacity: 0.6; }
+.sr-2 .sr-text { font-size: 20px; font-weight: 700; }
+.sr-2 i { width: 12px; height: 4px; }
 .context-card { flex: 1 1 340px; box-sizing: border-box; border-radius: 30px; background: #F5F5F7; padding: 40px; display: flex; flex-direction: column; gap: 24px; }
 .context-title { margin: 8px 0 0; font-size: clamp(30px, 3vw, 40px); line-height: 1.15; font-weight: 700; letter-spacing: -0.015em; }
 .context-sample { margin-top: auto; border-radius: 18px; background: #FFFFFF; padding: 18px 20px; display: flex; flex-direction: column; gap: 6px; }
@@ -349,6 +348,7 @@ a:hover { text-decoration: underline; }
   .feature-card { padding: 28px; min-height: 0; border-radius: 24px; }
   .fl-2 .fl-tr { font-size: 32px; }
   .speed-card, .context-card { padding: 28px; border-radius: 24px; }
+  .speed-title { font-size: 48px; }
   .mode-video { padding: 28px; gap: 28px; border-radius: 24px; }
   .vm { flex-basis: 100%; height: auto; flex-wrap: wrap; }
   .vm-tile { flex: 1 1 0; height: 150px; }
