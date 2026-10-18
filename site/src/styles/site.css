@@ -1,24 +1,23 @@
 /*
- * 소개 페이지. 색·글꼴은 앱과 같은 디자인 토큰(design/tokens.css)을 쓰고, 다크 테마 값만 여기서 덧씌운다.
- * 크게 쓰는 것은 두 가지뿐: 로고처럼 비켜 선 두 줄 제목(처음과 끝), 스크롤로 진행되는 회의 장면.
- * 움직임은 html.motion(움직임 줄이기 설정이 아닐 때 스크립트가 붙임)일 때만 켠다. 없으면 모든 내용이 정지 상태로 펼쳐진다.
+ * 약관·개인정보·환불 페이지와 없는 페이지의 공통 바탕(소개 페이지는 landing.css를 따로 쓴다).
+ * 색·글꼴은 앱과 같은 디자인 토큰(design/tokens.css)을 쓰고, 다크 테마 값만 여기서 덧씌운다.
  */
 @import '../../../design/tokens.css';
 
-:root { --accent: #1D1D1F; --accent-hover: #2C2C2E; --mark-ink: var(--brand-ink); --stage-deep: #16181D; --header-bg: rgb(250 250 247 / .82); color-scheme: light; }
+:root { --accent: #1D1D1F; --accent-hover: #2C2C2E; --mark-ink: var(--brand-ink); --header-bg: rgb(250 250 247 / .82); color-scheme: light; }
 /* 다크: 시스템 설정이 다크이고 사용자가 라이트를 고르지 않았을 때, 또는 다크를 골랐을 때 */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --page-bg: #121317; --panel-bg: #1C1E23; --text: #F3F2EE; --text-secondary: #B4B6BC; --text-tertiary: #8F939B;
     --divider: #2A2C33; --border: #3A3D45; --hover: #22252B; --field-bg: #24262C; --field-bg-hover: #2C2F36;
-    --accent: #F3F2EE; --accent-hover: #FFFFFF; --accent-text: #FF8A66; --mark-ink: #F3F2EE; --stage-deep: #0B0C0F;
+    --accent: #F3F2EE; --accent-hover: #FFFFFF; --accent-text: #FF8A66; --mark-ink: #F3F2EE;
     --header-bg: rgb(18 19 23 / .8); color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
   --page-bg: #121317; --panel-bg: #1C1E23; --text: #F3F2EE; --text-secondary: #B4B6BC; --text-tertiary: #8F939B;
   --divider: #2A2C33; --border: #3A3D45; --hover: #22252B; --field-bg: #24262C; --field-bg-hover: #2C2F36;
-  --accent: #F3F2EE; --accent-hover: #FFFFFF; --accent-text: #FF8A66; --mark-ink: #F3F2EE; --stage-deep: #0B0C0F;
+  --accent: #F3F2EE; --accent-hover: #FFFFFF; --accent-text: #FF8A66; --mark-ink: #F3F2EE;
   --header-bg: rgb(18 19 23 / .8); color-scheme: dark;
 }
 
@@ -34,367 +33,21 @@ svg { display: block; }
 /* 한국어는 어절 단위로, 일본어 제목은 문절 단위로 줄을 바꾼다. */
 :lang(ko) { word-break: keep-all; }
 :lang(ja), :lang(zh) { word-break: normal; }
-:is(h1, h2, h3, .pair-title):lang(ja) { word-break: auto-phrase; }
+:is(h1, h2, h3):lang(ja) { word-break: auto-phrase; }
 :focus-visible { outline: 2px solid var(--text); outline-offset: 3px; border-radius: 4px; }
 
 .wrap { width: 100%; max-width: 1200px; margin: 0 auto; padding: 0 28px; }
 .skip { position: absolute; left: 16px; top: -48px; z-index: 20; padding: 8px 14px; border-radius: 8px; background: var(--accent); color: var(--page-bg); text-decoration: none; }
 .skip:focus { top: 12px; }
 
-/* ── 버튼 ── */
 .btn { display: inline-flex; align-items: center; justify-content: center; height: 42px; padding: 0 18px; border-radius: var(--radius-full); font-size: 15px; font-weight: 600; text-decoration: none; white-space: nowrap; transition: background-color var(--duration), border-color var(--duration), color var(--duration); }
-.btn-lg { height: 54px; padding: 0 26px; font-size: 16px; }
-.btn-ink { background: var(--accent); color: var(--page-bg); }
-.btn-ink:hover { background: var(--accent-hover); }
-/* 시작하기: 앱의 주요 버튼과 같은 주황(흰 글자 4.6:1). 테마와 관계없이 같다. */
-.btn-cta { background: #D4401C; color: #FFFFFF; }
-.btn-cta:hover { background: #BC3816; }
 .btn-outline { border: 1.5px solid var(--border); }
 .btn-outline:hover { border-color: var(--text); }
-.btn-plain { text-decoration: underline; text-decoration-thickness: 1.5px; text-underline-offset: 6px; text-decoration-color: var(--border); }
-.btn-plain:hover { text-decoration-color: var(--text); }
-
-/* ── 머리(위에 붙어 다니고, 뒤가 흐리게 비친다) ── */
-.top { position: sticky; top: 0; z-index: 10; background: var(--header-bg); backdrop-filter: saturate(1.4) blur(14px); -webkit-backdrop-filter: saturate(1.4) blur(14px); }
-.top-row { display: flex; align-items: center; gap: 32px; height: 72px; }
 .brand { display: inline-flex; align-items: center; gap: 8px; font-size: 22px; font-weight: 800; letter-spacing: -0.05em; text-decoration: none; }
-.top-nav { display: flex; gap: 26px; }
-.link-quiet { white-space: nowrap; }
-.top-nav a, .link-quiet { color: var(--text-secondary); font-size: 15px; text-decoration: none; transition: color var(--duration); }
-.top-nav a:hover, .link-quiet:hover { color: var(--text); }
-.top-actions { margin-left: auto; display: flex; align-items: center; gap: 16px; }
-.langs { display: flex; gap: 2px; padding: 3px; border-radius: var(--radius-full); background: var(--field-bg); }
-.langs a { white-space: nowrap; padding: 4px 10px; border-radius: var(--radius-full); color: var(--text-secondary); font-size: 13px; font-weight: 600; text-decoration: none; }
-.langs a[aria-current="page"] { background: var(--panel-bg); color: var(--text); box-shadow: 0 1px 2px rgb(0 0 0 / .1); }
-.top.on-dark { --text: #F3F2EE; --text-secondary: #B4B6BC; --field-bg: #24262C; --panel-bg: #2C2F36; --hover: #2C2F36; --accent: #F3F2EE; --accent-hover: #FFFFFF; --page-bg: #16181D; --mark-ink: #F3F2EE; background: rgb(22 24 29 / .78); color: var(--text); }
-.top { transition: background-color 250ms, box-shadow 250ms; }
-.top.scrolled { box-shadow: 0 1px 0 var(--divider); }
-.top.on-dark { box-shadow: none; }
-.theme-btn { display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: var(--radius-full); background: transparent; color: var(--text-secondary); cursor: pointer; }
-.theme-btn:hover { background: var(--hover); color: var(--text); }
-.theme-btn svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; display: none; }
-.theme-btn .i-system { display: block; }
-.theme-btn[data-current="light"] .i-system, .theme-btn[data-current="dark"] .i-system { display: none; }
-.theme-btn[data-current="light"] .i-light, .theme-btn[data-current="dark"] .i-dark { display: block; }
 
-/*
- * 두 줄 제목: 첫 줄, 그리고 로고의 아래 막대처럼 주황 막대를 앞세워 오른쪽으로 비켜 선 둘째 줄.
- * 페이지가 열리면 첫 줄이 떠오르고 → 막대가 그어지고 → 둘째 줄이 제자리로 들어온다(이 페이지의 유일한 자동 움직임).
- */
-.hero { min-height: calc(100svh - 72px); display: flex; flex-direction: column; justify-content: center; padding-top: 48px; padding-bottom: 96px; }
-.pair-title { font-size: clamp(42px, 7.2vw, 104px); font-weight: 800; line-height: 1.04; letter-spacing: -0.045em; }
-.pair-title span { display: block; }
-/* 일본어는 글자가 넓어 한 줄에 덜 들어간다. 문절 줄바꿈이 없는 브라우저에서도 둘째 줄이 낱말 중간에서 꺾이지 않게 조금 작게 */
-.pair-title:lang(ja) { font-size: clamp(36px, 5.6vw, 84px); }
-.pt-2 { position: relative; margin-top: .06em; padding-left: .9em; }
-.pt-bar { position: absolute; left: 0; top: .45em; top: calc(.5lh - .07em); width: .58em; height: .14em; border-radius: 1em; background: var(--brand-accent); }
-.hero .lead { max-width: 36em; margin-top: 36px; color: var(--text-secondary); font-size: clamp(17px, 1.5vw, 20px); line-height: 1.65; }
-.hero-cta { display: flex; flex-wrap: wrap; align-items: center; gap: 22px; margin-top: 40px; }
-.hero-price { margin-top: 18px; color: var(--text-secondary); font-size: 15px; }
-.hero-points { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 32px; max-width: 960px; margin-top: 72px; padding-top: 28px; border-top: 1px solid var(--border); }
-.hero-points li { display: grid; gap: 4px; font-size: 17px; line-height: 1.5; }
-.hero-points li span:first-child { font-weight: 700; }
-.hero-points .tr-mark { color: var(--text-secondary); }
-.motion .hero .pt-1 { animation: rise 900ms cubic-bezier(.2, .8, .2, 1) 80ms both; }
-.motion .hero .pt-bar { animation: draw 600ms cubic-bezier(.6, 0, .2, 1) 520ms both; transform-origin: left center; }
-.motion .hero .pt-2 { animation: slide 900ms cubic-bezier(.2, .8, .2, 1) 640ms both; }
-.motion .hero-in { animation: fade 800ms ease 1100ms both; }
-@keyframes rise { from { opacity: 0; transform: translateY(.35em); } }
-@keyframes draw { from { transform: scaleX(0); } }
-@keyframes slide { from { opacity: 0; transform: translateX(-.5em); } }
-@keyframes fade { from { opacity: 0; transform: translateY(10px); } }
-
-/* ── 문제 제기: 큰 문장, 스크롤에 맞춰 낱말이 하나씩 진해진다 ── */
-.statement { padding-top: 40px; padding-bottom: 200px; }
-.statement p { max-width: 22em; font-size: clamp(30px, 4.2vw, 58px); font-weight: 700; line-height: 1.28; letter-spacing: -0.03em; }
-.motion .statement .w { color: color-mix(in srgb, var(--text) 30%, var(--page-bg)); transition: color 300ms ease; }
-.motion .statement .w.on { color: var(--text); }
-
-/* ── 구역 공통 ── */
-.section { padding-top: 160px; }
-.section-title { max-width: 18em; font-size: clamp(32px, 4vw, 52px); font-weight: 800; line-height: 1.12; letter-spacing: -0.035em; text-wrap: balance; }
-.section-lead { max-width: 38em; margin-top: 16px; color: var(--text-secondary); font-size: 18px; }
-
-/*
- * 회의 장면. 움직임이 켜져 있으면 구역이 화면 4배 길이가 되고 안쪽이 화면에 고정된다.
- * --a(다가오는 정도): 기울어진 화면이 평평해진다. --p(진행률): 왼쪽 진행 막대. 대화 글자는 스크립트가 바꾼다.
- */
-.story { padding: 120px 0; background: var(--stage-deep); color: #F3F2EE; }
-.motion .story { height: 420vh; padding: 0; }
-.story-pin { display: flex; align-items: center; }
-.motion .story-pin { position: sticky; top: 0; height: 100svh; padding-top: 72px; }
-.story-grid { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.5fr); gap: 72px; align-items: center; }
-.story-steps { display: grid; gap: 40px; }
-.story-steps h2 { font-size: clamp(26px, 2.6vw, 36px); font-weight: 800; line-height: 1.18; letter-spacing: -0.03em; text-wrap: balance; }
-.story-steps p { margin-top: 14px; color: #B4B6BC; font-size: 18px; max-width: 24em; }
-.motion .story-steps { position: relative; min-height: 300px; padding-left: 28px; }
-.motion .story-steps::before { content: ""; position: absolute; left: 0; top: 6px; bottom: 6px; width: 2px; border-radius: 2px; background: #2C2F36; }
-.motion .story-steps::after { content: ""; position: absolute; left: 0; top: 6px; bottom: 6px; width: 2px; border-radius: 2px; background: var(--brand-accent); transform: scaleY(var(--p, 0)); transform-origin: top; }
-.motion .story-steps li { position: absolute; left: 28px; right: 0; top: 0; opacity: 0; transform: translateY(28px); transition: opacity 500ms ease, transform 600ms cubic-bezier(.2, .8, .2, 1); }
-.motion .story-steps li.is-active { opacity: 1; transform: none; }
-
-.meeting { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 320px); gap: 10px; height: min(560px, 72svh); padding: 10px; border-radius: 24px; background: #1E2026; box-shadow: 0 40px 80px -24px rgb(0 0 0 / .6); }
-.motion .meeting { transform: perspective(1600px) rotateX(calc((1 - var(--a, 1)) * 18deg)) translateY(calc((1 - var(--a, 1)) * 80px)) scale(calc(.9 + var(--a, 1) * .1)); transform-origin: 50% 100%; will-change: transform; }
-.meeting-tiles { display: grid; grid-template-rows: 1fr 1fr; gap: 10px; min-height: 0; }
-.tile { position: relative; overflow: hidden; min-height: 0; border-radius: 14px; background: var(--tile-bg); }
-.tile .face { position: absolute; inset: 0; width: 100%; height: 100%; }
-.tile::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 2.5px var(--brand-accent); opacity: 0; transition: opacity 200ms; }
-.tile.speaking::after { opacity: 1; }
-.tile-name { position: absolute; z-index: 1; left: 12px; bottom: 12px; padding: 3px 10px; border-radius: var(--radius-full); background: rgb(22 24 29 / .6); color: #F3F2EE; font-size: 13px; font-weight: 600; }
-/* 자막 패널은 실제 앱처럼 언제나 흰 바탕이다(회의 화면은 테마와 상관없이 어둡다). */
-.meeting-panel { display: flex; flex-direction: column; min-height: 0; padding: 0 18px 6px; border-radius: 14px; background: #FFFFFF; color: #16181D; }
-.panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 16px 0 12px; border-bottom: 1px solid #ECEAE5; }
-.panel-langs { padding: 3px 10px; border-radius: var(--radius-full); background: #EDEBE5; color: #5B5F68; font-size: 12px; font-weight: 600; white-space: nowrap; }
-.panel-feed { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: flex-end; overflow: hidden; }
-.entry { padding: 14px 0; border-bottom: 1px solid #ECEAE5; }
-.entry:last-child { border-bottom: 0; }
-.entry p { font-size: 15px; line-height: 1.6; transition: color 200ms; }
-.entry p + p { margin-top: 2px; }
-.entry .entry-meta { display: flex; gap: 8px; margin-bottom: 4px; font-size: 12px; }
-.entry-meta time { color: #5B5F68; }
-.entry.pending p:not(.entry-meta) { color: #5B5F68; }
-.motion .entry.off { display: none; }
-.entry.typing [data-src]::after { content: ""; display: inline-block; width: 2px; height: 1em; margin-left: 2px; vertical-align: -0.15em; background: var(--brand-accent); }
-/* 번역 줄 표시(앱과 같은 .tr-mark): 로고의 아래 막대를 작게 */
-.tr-mark { position: relative; padding-left: .8em; }
-.tr-mark::before { content: ""; position: absolute; left: 0; top: .7em; top: calc(.5lh - .08em); width: .46em; height: max(2px, .16em); border-radius: 1em; background: var(--brand-accent); }
-.pending .tr-mark::before { opacity: .45; }
-
-/* ── 세 가지 자리: 움직임이 켜져 있으면 고정된 채 화상 → 대면 → 자막 화면으로 바뀐다 ── */
-.modes { padding-top: 160px; }
-.motion .modes { height: 330vh; padding-top: 0; }
-.motion .modes-pin { position: sticky; top: 0; height: 100svh; padding-top: 72px; display: flex; align-items: center; }
-.modes-grid { display: grid; gap: 96px; margin-top: 56px; }
-.motion .modes-grid { position: relative; height: min(520px, 62svh); gap: 0; margin-top: 48px; }
-.mode { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 72px; align-items: center; }
-/* 안 보이는 모드도 접근성 트리·페이지 검색에는 남겨 둔다(투명하게만, 눌리지 않게). */
-.motion .mode { position: absolute; inset: 0; opacity: 0; pointer-events: none; transition: opacity 500ms ease; }
-.motion .mode.is-active { opacity: 1; pointer-events: auto; }
-.motion .mode .device { transform: translateY(24px) scale(.97); transition: transform 700ms cubic-bezier(.2, .8, .2, 1); }
-.motion .mode.is-active .device { transform: none; }
-.motion .mode .mode-text { transform: translateY(18px); transition: transform 700ms cubic-bezier(.2, .8, .2, 1) 60ms; }
-.motion .mode.is-active .mode-text { transform: none; }
-.mode-bars { display: flex; gap: 6px; margin-bottom: 22px; }
-.mode-bars i { width: 22px; height: 4px; border-radius: 2px; background: var(--border); }
-.mode-bars i.on { background: var(--brand-accent); }
-.mode h3 { font-size: clamp(28px, 3vw, 40px); font-weight: 800; letter-spacing: -0.03em; line-height: 1.15; }
-.mode p { margin-top: 16px; color: var(--text-secondary); font-size: 18px; max-width: 26em; }
-/* 기기 영역의 가로·세로 중 좁은 쪽에 맞춰 그림 크기를 정한다(어떤 화면 비율에서도 잘리지 않게). */
-.device { display: grid; place-items: center; height: min(520px, 62svh); border-radius: 28px; background: var(--field-bg); overflow: hidden; container-type: size; }
-.mock-video { display: grid; grid-template-columns: 1fr .6fr; gap: 8px; width: min(88cqw, 86cqh * 1.6); aspect-ratio: 16 / 10; padding: 12px; border-radius: 18px; background: var(--brand-ink); }
-.mv-tiles { display: grid; gap: 8px; }
-.mv-tiles .tile { border-radius: 10px; }
-.mv-panel { display: flex; flex-direction: column; justify-content: center; gap: 12px; padding: 14px; border-radius: 10px; background: #FFFFFF; }
-.mv-panel i { height: 6px; border-radius: 3px; background: #D6D3CB; }
-.mv-panel i.tr { position: relative; width: 78%; margin-left: 12px; background: #5B5F68; }
-.mv-panel i.tr::before { content: ""; position: absolute; left: -12px; top: 0; width: 7px; height: 6px; border-radius: 3px; background: var(--brand-accent); }
-.mock-phone { display: flex; flex-direction: column; gap: 6px; width: min(46cqw, 240px, 60cqh); height: 86cqh; padding: 9px; border-radius: 30px; background: var(--brand-ink); }
-.mp-half { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 6px; padding: 14px; border-radius: 20px; background: #FFFFFF; color: #16181D; font-size: 15px; font-weight: 700; line-height: 1.35; }
-.mp-half small { color: #5B5F68; font-size: 11px; font-weight: 500; }
-.mp-half.far { transform: rotate(180deg); }
-.mock-tablet { display: flex; flex-direction: column; justify-content: flex-end; gap: 14px; width: min(88cqw, 86cqh * 4 / 3); aspect-ratio: 4 / 3; padding: 6cqh 6cqw; border: 12px solid var(--brand-ink); border-radius: 26px; background: #FFFFFF; color: #16181D; }
-.mt-line small { display: block; color: #5B5F68; font-size: 12px; }
-.mt-line span { display: block; font-size: clamp(14px, 4.4cqh, 22px); font-weight: 700; letter-spacing: -0.01em; line-height: 1.3; }
-.mt-line.dim span { color: #8F939B; }
-
-/* ── 회의에서 중요한 것들 ── */
-.details { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 48px; margin-top: 56px; }
-.details > div { padding: 28px 0 36px; border-top: 1px solid var(--border); }
-.details dt { font-size: 19px; font-weight: 700; letter-spacing: -0.015em; }
-.details dd { margin-top: 8px; color: var(--text-secondary); }
-
-/* ── 요금 ── */
-.pricing-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)) minmax(0, .9fr); gap: 16px; margin-top: 48px; }
-.plan { display: flex; flex-direction: column; padding: 32px; border: 1.5px solid var(--border); border-radius: 24px; }
-.plan h3 { font-size: 18px; font-weight: 700; }
-.plan-price { display: flex; align-items: baseline; gap: 6px; margin-top: 20px; }
-.plan-price span { font-size: 56px; font-weight: 800; letter-spacing: -0.045em; line-height: 1; }
-.plan-price small { color: var(--text-secondary); font-size: 15px; }
-.plan-hours { margin-top: 20px; font-weight: 600; }
-.plan-note { margin: 6px 0 32px; color: var(--text-secondary); font-size: 15px; }
-.plan .btn { margin-top: auto; }
-.plan-main { border-color: var(--accent); background: var(--accent); color: var(--page-bg); }
-.plan-main .plan-price small, .plan-main .plan-note { color: color-mix(in srgb, var(--page-bg) 68%, var(--accent)); }
-.plan-main .btn-ink { background: var(--page-bg); color: var(--text); }
-.plan-main .btn-ink:hover { background: var(--field-bg); }
-.plan-main :focus-visible { outline-color: var(--page-bg); }
-.includes { display: flex; flex-direction: column; padding: 32px 8px 32px 28px; }
-.includes h3 { font-size: 18px; font-weight: 700; }
-.includes ul { display: grid; gap: 12px; margin-top: 22px; }
-.includes li { color: var(--text-secondary); }
-.plans-extra { margin-top: auto; padding-top: 28px; font-weight: 600; }
-.plans-fine { margin-top: 6px; color: var(--text-secondary); font-size: 14px; }
-
-/* ── 질문 ── */
-.faq { max-width: 860px; margin-top: 40px; border-top: 1px solid var(--border); }
-.faq details { border-bottom: 1px solid var(--border); }
-.faq summary { display: flex; justify-content: space-between; gap: 24px; padding: 24px 0; font-size: 18px; font-weight: 600; cursor: pointer; list-style: none; }
-.faq summary::-webkit-details-marker { display: none; }
-.faq summary::after { content: ""; flex: none; width: 11px; height: 11px; margin-top: 7px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(45deg); transition: transform var(--duration); }
-.faq details[open] summary::after { transform: rotate(-135deg); margin-top: 12px; }
-.faq details p { max-width: 42em; padding-bottom: 26px; color: var(--text-secondary); }
-
-/* ── 마지막 문장: 화면에 들어오면 두 줄이 제자리로 맞춰 선다 ── */
-.closing { padding-top: 200px; padding-bottom: 40px; }
-.closing-title { font-size: clamp(40px, 6.4vw, 92px); }
-.closing .btn { margin-top: 48px; }
-.motion .closing:not(.in) .pt-1 { opacity: 0; transform: translateY(.35em); }
-.motion .closing:not(.in) .pt-bar { transform: scaleX(0); }
-.motion .closing:not(.in) .pt-2 { opacity: 0; transform: translateX(-.5em); }
-.motion .closing .pt-1 { transition: opacity 800ms ease, transform 900ms cubic-bezier(.2, .8, .2, 1); }
-.motion .closing .pt-bar { transform-origin: left center; transition: transform 600ms cubic-bezier(.6, 0, .2, 1) 350ms; }
-.motion .closing .pt-2 { transition: opacity 800ms ease 450ms, transform 900ms cubic-bezier(.2, .8, .2, 1) 450ms; }
-
-/* ── 꼬리말 ── */
-.foot { margin-top: 160px; padding: 56px 0 72px; border-top: 1px solid var(--border); }
-.foot-grid { display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr 1.4fr; gap: 32px; }
-.foot-brand p { margin-top: 14px; color: var(--text-secondary); font-size: 14px; }
-.foot h2 { margin-bottom: 12px; color: var(--text-secondary); font-size: 14px; font-weight: 600; }
-.foot nav a, .foot-list a, .foot-gh { display: flex; align-items: center; gap: 8px; width: fit-content; padding: 4px 0; font-size: 15px; text-decoration: none; }
-.foot nav a:hover, .foot-list a:hover, .foot-gh:hover { text-decoration: underline; text-underline-offset: 4px; }
-.foot-list a[aria-current="page"] { font-weight: 700; }
-
-/* ── Powered by Gemini ── */
-.gem-pill { display: inline-flex; align-items: center; gap: 8px; width: fit-content; margin-top: 18px; padding: 7px 14px 7px 10px; border-radius: var(--radius-full); background: var(--panel-bg); box-shadow: 0 0 0 1px var(--border); color: var(--text-secondary); font-size: 14px; line-height: 1.2; }
-.gem-pill b { color: var(--text); font-weight: 600; }
-
-/* ── 번역 엔진: 속도와 맥락 ── */
-.engine-head { text-align: center; }
-.engine-eyebrow { display: inline-flex; align-items: center; gap: 10px; font-size: 17px; font-weight: 600; }
-.engine-title { margin-top: 16px; font-size: clamp(40px, 5vw, 72px); font-weight: 800; line-height: 1.05; letter-spacing: -0.035em; }
-.gem-text { background: linear-gradient(90deg, #4285F4 0%, #9B72CB 50%, #D96570 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
-.engine-head .section-lead { margin-inline: auto; }
-.engine-cards { display: grid; grid-template-columns: 1.3fr 1fr; gap: 16px; margin-top: 56px; }
-.speed-card, .context-card { display: flex; flex-direction: column; gap: 28px; padding: 40px; border-radius: 30px; }
-.speed-card { background: #000000; color: #F5F5F7; }
-.context-card { background: var(--panel-bg); }
-.eyebrow { font-size: 14px; font-weight: 600; color: var(--accent-text); }
-.speed-card .eyebrow { color: #FF8A66; }
-.speed-title { margin-top: 8px; font-size: clamp(52px, 5.6vw, 76px); font-weight: 800; line-height: 1.02; letter-spacing: -0.03em; }
-.context-title { margin-top: 8px; font-size: clamp(28px, 3vw, 40px); font-weight: 800; line-height: 1.15; letter-spacing: -0.02em; }
-.card-body { margin-top: 12px; color: var(--text-secondary); font-size: 17px; line-height: 1.55; }
-.speed-card .card-body { color: rgb(235 235 245 / .7); }
-.speed-rows { display: grid; gap: 10px; font-size: 15px; }
-.speed-row { display: flex; align-items: baseline; gap: 12px; color: rgb(235 235 245 / .7); }
-.speed-label { flex: none; width: 7.5em; font-size: 12px; color: rgb(235 235 245 / .5); }
-.speed-row.r1 { color: rgb(245 245 247 / .62); font-weight: 600; }
-.speed-row.r2 { color: #F5F5F7; font-size: 20px; font-weight: 700; }
-.context-sample { display: grid; gap: 6px; margin-top: auto; padding: 18px 20px; border-radius: 18px; background: var(--page-bg); }
-.context-sample p:first-child { color: var(--text-secondary); font-size: 14px; }
-.context-sample b { color: var(--text); font-weight: 600; }
-.context-sample .tr-mark { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; }
-
-/* ── 개인정보: 자막이 나타났다가 흩어진다 ── */
-.privacy { margin-top: 160px; padding: 140px 0 120px; background: #000000; color: #F5F5F7; text-align: center; overflow: hidden; }
-.privacy-title { font-size: clamp(40px, 5vw, 72px); font-weight: 800; line-height: 1.05; letter-spacing: -0.035em; }
-.privacy-lead { max-width: 680px; margin: 24px auto 0; color: rgb(235 235 245 / .7); font-size: clamp(17px, 1.6vw, 21px); line-height: 1.55; }
-.pv-stage { position: relative; max-width: 880px; margin: 72px auto 0; padding: 48px 32px 40px; border-radius: 32px; background: radial-gradient(120% 90% at 50% 0%, #1C1C1E 0%, #0A0A0B 70%); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .08); }
-.pv-lines { position: relative; height: 112px; }
-.pv-line { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center; }
-.pv-src { color: rgb(235 235 245 / .6); font-size: 15px; }
-.pv-src b { font-weight: 600; color: rgb(235 235 245 / .85); }
-.pv-tr { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 6px; font-size: clamp(20px, 2.6vw, 32px); font-weight: 700; line-height: 1.3; letter-spacing: -0.01em; }
-.pv-tr i { flex: none; width: 14px; height: 4px; border-radius: 2px; background: var(--brand-accent); }
-.pv-ch { display: inline-block; }
-/* 움직임이 없으면 첫 줄만 그대로 보인다 */
-.pv-line + .pv-line { visibility: hidden; }
-.motion .pv-line + .pv-line { visibility: visible; }
-.motion .pv-ch { opacity: 0; animation: pv-evap 12s cubic-bezier(.2, .7, .2, 1) var(--d) infinite both; }
-@keyframes pv-evap {
-  0% { opacity: 0; filter: blur(8px); transform: translateY(10px); }
-  4%, 22% { opacity: 1; filter: blur(0); transform: none; }
-  31%, 100% { opacity: 0; filter: blur(10px); transform: translate(6px, -22px) scale(.9); }
-}
-.pv-people { display: flex; align-items: center; gap: 16px; margin-top: 44px; }
-.pv-person { flex: none; width: 92px; display: flex; flex-direction: column; align-items: center; gap: 10px; color: rgb(235 235 245 / .85); font-size: 14px; font-weight: 600; }
-.pv-avatar { width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; background: linear-gradient(180deg, #A2A6B0 0%, #7D818C 100%); color: #FFFFFF; font-size: 26px; font-weight: 600; }
-.pv-avatar.on { box-shadow: 0 0 0 3px var(--brand-accent), 0 0 0 9px rgb(242 84 45 / .18); }
-.pv-mid { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 12px; }
-.pv-wire { position: relative; width: 100%; height: 18px; container-type: inline-size; }
-.pv-line-bg { position: absolute; left: 0; right: 0; top: 50%; height: 1px; background: linear-gradient(90deg, rgb(255 255 255 / .05), rgb(255 255 255 / .28), rgb(255 255 255 / .05)); }
-.pv-dot { position: absolute; top: 50%; left: 0; width: 6px; height: 6px; margin-top: -3px; border-radius: 3px; background: #F5F5F7; opacity: 0; }
-.pv-dot:nth-of-type(odd) { background: #FF8A66; }
-.motion .pv-dot { animation: pv-flow 3.6s linear var(--d) infinite; }
-.motion .pv-rev { animation-name: pv-flow-rev; }
-/* left 대신 transform으로 옮겨 매 프레임 레이아웃을 다시 하지 않는다 */
-@keyframes pv-flow { 0% { transform: translateX(0); opacity: 0; } 10%, 90% { opacity: .9; } 100% { transform: translateX(calc(100cqw - 6px)); opacity: 0; } }
-@keyframes pv-flow-rev { 0% { transform: translateX(calc(100cqw - 6px)); opacity: 0; } 10%, 90% { opacity: .5; } 100% { transform: translateX(0); opacity: 0; } }
-.pv-wire-label { color: rgb(235 235 245 / .6); font-size: 13px; }
-.pv-chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 36px; }
-.pv-chip { padding: 9px 16px; border-radius: var(--radius-full); background: rgb(255 255 255 / .07); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .08); color: rgb(235 235 245 / .75); font-size: 15px; transition: background 200ms, transform 200ms; }
-.pv-chip b { color: #FFFFFF; font-size: 17px; font-weight: 700; }
-.pv-chip:hover { background: rgb(242 84 45 / .18); transform: translateY(-2px); }
-.pv-toggle { display: none; margin-top: 22px; padding: 6px 14px; border: 0; border-radius: var(--radius-full); background: rgb(255 255 255 / .08); color: rgb(235 235 245 / .75); font: inherit; font-size: 13px; cursor: pointer; }
-.pv-toggle:hover { background: rgb(255 255 255 / .14); color: #FFFFFF; }
-.motion .pv-toggle { display: inline-flex; }
-/* 화면 밖이거나 멈춤을 눌렀으면 그리지 않는다 */
-.pv-stage:not(.pv-run) :is(.pv-ch, .pv-dot), .pv-paused :is(.pv-ch, .pv-dot), .pv-stage:hover :is(.pv-ch, .pv-dot) { animation-play-state: paused; }
-.privacy-link { display: inline-block; margin-top: 36px; color: #FF8A66; font-size: 18px; text-decoration: none; }
-.privacy-link:hover { text-decoration: underline; text-underline-offset: 4px; }
-.privacy :focus-visible { outline-color: #F5F5F7; }
-
-.foot-note { margin-top: 40px; padding-top: 28px; border-top: 1px solid var(--border); color: var(--text-secondary); font-size: 13px; line-height: 1.65; }
-.foot-biz { margin-top: 10px; color: var(--text-secondary); font-size: 12px; line-height: 1.65; }
-.foot-biz a { color: inherit; }
-
-/* ── 좁은 화면 ── */
-@media (max-width: 1080px) {
-  .top-nav { display: none; }
-  .pricing-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .includes { grid-column: 1 / -1; padding: 28px 0 0; }
-  .includes ul { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 32px; }
-  .details { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
-@media (max-width: 860px) {
-  /* 회의 장면: 화면을 위, 설명을 아래로 */
-  .story-grid { grid-template-columns: 1fr; gap: 28px; }
-  .story-steps { order: 2; }
-  .motion .story-steps { min-height: 170px; }
-  .meeting { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); height: min(520px, 62svh); }
-  .meeting-tiles { grid-template-rows: none; grid-template-columns: 1fr 1fr; height: 110px; }
-  .mode { grid-template-columns: 1fr; gap: 28px; }
-  .device, .motion .modes-grid { height: auto; }
-  .device { aspect-ratio: 4 / 3; height: auto; }
-  .motion .modes-grid { height: min(640px, 72svh); }
-  .motion .mode { align-content: start; }
-  .motion .mode .device { height: min(360px, 42svh); aspect-ratio: auto; }
-
-  .foot-grid { grid-template-columns: 1fr 1fr; }
-  .engine-cards { grid-template-columns: 1fr; }
-}
 @media (max-width: 640px) {
   .wrap { padding-inline: 18px; }
-  .top-row { gap: 10px; height: 64px; }
-  .motion .story-pin, .motion .modes-pin { padding-top: 64px; }
   .brand { font-size: 19px; }
-  .top-actions { gap: 6px; }
-  .top-actions .btn { display: none; }
-  .langs a { padding: 3px 7px; font-size: 12px; }
-  .link-quiet { font-size: 14px; }
-  .hero { min-height: calc(100svh - 64px); padding-bottom: 64px; }
-  .section, .modes { padding-top: 120px; }
-  .privacy { margin-top: 120px; padding: 96px 0 88px; }
-  .speed-card, .context-card { padding: 28px; border-radius: 24px; }
-  .pv-stage { padding: 32px 16px 28px; border-radius: 24px; }
-  .pv-lines { height: 136px; }
-  .pv-people { gap: 8px; }
-  .pv-person { width: 64px; }
-  .pv-avatar { width: 48px; height: 48px; font-size: 20px; }
-  .speed-label { width: 6em; }
-  .story-steps h2 { font-size: 24px; }
-  .story-steps p, .mode p { font-size: 16px; }
-  .details { grid-template-columns: 1fr; }
-  .pricing-grid, .includes ul { grid-template-columns: 1fr; }
-  .statement { padding-bottom: 140px; }
-  .hero-points { grid-template-columns: 1fr; gap: 18px; margin-top: 48px; }
-  .foot-grid { grid-template-columns: 1fr; }
-}
-@media (max-width: 420px) {
-  .langs a { padding: 3px 6px; }
-  .top-actions { gap: 2px; }
-}
-@media (max-width: 380px) {
-  .langs { display: none; }
 }
 
 /* ── 없는 페이지 ── */

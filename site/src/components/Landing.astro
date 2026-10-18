@@ -1,25 +1,41 @@
 ---
+// 소개 페이지(design/v2/source/MainFull.dc.html). 밝은 화면만 쓰고, 스크립트 없이 CSS 애니메이션만 쓴다.
 import type { Dict } from '../i18n/en'
 import Base from '../layouts/Base.astro'
-import { GITHUB_URL, legalLinks, LOCALES, SIGN_IN_URL, SIGNUP_URL, SITE_URL } from '../site'
+import { COMPANY, GITHUB_URL, legalLinks, LOCALES, SIGN_IN_URL, SIGNUP_URL, SITE_URL } from '../site'
 import Business from './Business.astro'
-import Face from './Face.astro'
 import Gemini from './Gemini.astro'
 import Mark from './Mark.astro'
+import '../styles/landing.css'
 
 interface Props { t: Dict }
 const { t } = Astro.props
 const LEGAL = legalLinks(t.lang)
-const you = (name: string) => t.you.replace('{name}', name)
-const names = { other: t.otherName, me: you(t.meName) }
-const nameLang = { other: t.otherNameLang, me: t.lang }
-const times = ['15:21', '15:22', '15:22']
-// 띄어 쓰지 않는 언어(일본어)는 문구에 | 로 나눠 둔다
-const words = t.statement.includes('|') ? t.statement.split('|') : t.statement.split(' ')
-const joiner = t.statement.includes('|') ? '' : ' '
-// 개인정보 장면: 글자마다 조금씩 늦게 나타나게 지연을 정한다. 줄마다 4초씩 차례로(한 바퀴 12초).
-const chars = (text: string, start: number, step: number) => [...text].map((c, i) => ({ c: c === ' ' ? '\u00a0' : c, d: `${(start + i * step).toFixed(3)}s` }))
-const privacyLines = t.privacyLines.map((l, k) => ({ ...l, name: l.who === 'me' ? t.meName : t.otherName, nameLang: l.who === 'me' ? t.lang : t.otherNameLang, src: chars(l.text, k * 4, 0.02), out: chars(l.tr, k * 4, 0.035), d: `${k * 4}s` }))
+const people = { me: { name: t.meName, lang: t.lang }, other: { name: t.otherName, lang: t.otherLang } }
+const initial = (name: string) => [...name][0]
+const [h0, , h2] = t.history
+// 개인정보 장면: 글자마다 조금씩 늦게 나타났다가 흩어진다. 줄마다 4초씩 차례로(한 바퀴 12초).
+// 띄어 쓰는 말은 낱말 단위로 묶어 낱말 중간에서 줄이 바뀌지 않게 한다(띄어 쓰지 않는 일본어는 글자마다 바뀔 수 있다).
+type Word = { space: boolean; chars: { c: string; d: string }[] }
+const words = (text: string, start: number, step: number) => {
+  const out: Word[] = []
+  ;[...text].forEach((c, i) => {
+    const ch = { c, d: `animation-delay: ${(start + i * step).toFixed(3)}s` }
+    const last = out[out.length - 1]
+    if (c === ' ') out.push({ space: true, chars: [] })
+    else if (!text.includes(' ') || !last || last.space) out.push({ space: false, chars: [ch] })
+    else last.chars.push(ch)
+  })
+  return out
+}
+const privacyLines = t.privacyLines.map((l, k) => ({
+  who: people[l.who],
+  src: l.src,
+  tr: l.tr,
+  d: `animation-delay: ${k * 4}s`,
+  srcWords: words(l.src[1], k * 4, 0.02),
+  trWords: words(l.tr[1], k * 4, 0.035),
+}))
 const dots = Array.from({ length: 8 }, (_, i) => i)
 
 const jsonLd = [
@@ -41,431 +57,317 @@ const jsonLd = [
   },
 ]
 ---
-<Base t={t} jsonLd={jsonLd}>
+<Base t={t} jsonLd={jsonLd} lightOnly>
   <a class="skip" href="#main">{t.skipToContent}</a>
-  <header class="top">
-    <div class="wrap top-row">
-      <a class="brand" href={t.path} aria-label="Tolkmeet"><Mark size={28} /><span>tolkmeet</span></a>
-      <nav class="top-nav" aria-label={t.navLabel}>
-        <a href="#story">{t.navStory}</a>
-        <a href="#modes">{t.navModes}</a>
-        <a href="#privacy">{t.navPrivacy}</a>
-        <a href="#pricing">{t.navPricing}</a>
-        <a href="#faq">{t.navFaq}</a>
-      </nav>
-      <div class="top-actions">
-        <nav class="langs" aria-label={t.languageLabel}>
-          {LOCALES.map((l) => <a href={l.path} hreflang={l.lang} lang={l.lang} aria-current={l.lang === t.lang ? 'page' : undefined}>{l.langName}</a>)}
-        </nav>
-        <button class="theme-btn" type="button" data-theme-cycle
-          data-labels={JSON.stringify({ system: t.themeSystem, light: t.themeLight, dark: t.themeDark, label: t.themeLabel })}
-          aria-label={`${t.themeLabel}: ${t.themeSystem}`}>
-          <svg class="i-system" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H4z M9 20h6 M12 16v4" /></svg>
-          <svg class="i-light" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4" /><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6" /></svg>
-          <svg class="i-dark" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" /></svg>
-        </button>
-        <a class="link-quiet" href={SIGN_IN_URL}>{t.signIn}</a>
-        <a class="btn btn-cta" href={SIGNUP_URL}>{t.getStarted}</a>
-      </div>
-    </div>
+  <header class="nav">
+    <nav class="nav-in" aria-label={t.navLabel}>
+      <a class="nav-brand" href={t.path} aria-label="Tolkmeet"><Mark size={22} />tolkmeet</a>
+      <ul class="nav-links">
+        <li><a href="#how">{t.navHow}</a></li>
+        <li><a href="#modes">{t.navModes}</a></li>
+        <li><a href="#privacy">{t.navPrivacy}</a></li>
+        <li><a href="#pricing">{t.navPricing}</a></li>
+        <li><a href="#faq">{t.navFaq}</a></li>
+      </ul>
+      {/* 언어 선택: 스크립트 없이 열고 닫히는 메뉴. 각 언어는 진짜 링크다. */}
+      <details class="lang">
+        <summary aria-label={`${t.languageLabel}: ${t.langName}`}>
+          <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z" /></svg>
+          <span class="lang-cur">{t.langName}</span>
+          <svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5 6 7.5 9 4.5" /></svg>
+        </summary>
+        <ul class="lang-menu">
+          {LOCALES.map((l) => <li><a href={l.path} hreflang={l.lang} lang={l.lang} aria-current={l.lang === t.lang ? 'page' : undefined}>{l.langName}</a></li>)}
+        </ul>
+      </details>
+      <a class="nav-signin" href={SIGN_IN_URL}>{t.signIn}</a>
+      <a class="nav-cta" href={SIGNUP_URL}>{t.getStarted}</a>
+    </nav>
   </header>
 
   <main id="main">
-    {/* 첫 화면: 로고처럼 두 줄 — 둘째 줄이 비켜 서고 앞에 주황 막대. 페이지가 열릴 때 이 순서로 한 번만 움직인다. */}
-    <section class="hero wrap">
-      <h1 class="pair-title">
-        <span class="pt-1">{t.heroLine1}</span>
-        <span class="pt-2"><i class="pt-bar" aria-hidden="true"></i>{t.heroLine2}</span>
-      </h1>
-      <p class="lead hero-in">{t.heroLead}</p>
-      <div class="hero-cta hero-in">
-        <a class="btn btn-cta btn-lg" href={SIGNUP_URL}>{t.getStarted}</a>
-        <a class="btn btn-plain btn-lg" href="#story">{t.heroSecondary}</a>
+    <section class="hero">
+      <Mark size={64} />
+      <h1 class="hero-title">{t.heroTitle1}<br />{t.heroTitle2}</h1>
+      <p class="hero-lead">{t.heroLead}</p>
+      <div class="hero-cta">
+        <a class="btn btn-cta" href={SIGNUP_URL}>{t.getStarted}</a>
+        <a class="hero-more" href="#how">{t.heroSecondary}<span aria-hidden="true"> ›</span></a>
       </div>
-      <p class="hero-price hero-in">{t.heroPrice}</p>
-      <p class="gem-pill hero-in"><Gemini id="gem-hero" /><span>{t.poweredBy} <b>Gemini</b></span></p>
-      <ul class="hero-points hero-in">
-        {t.heroPoints.map(([a, b]) => (
-          <li><span>{a}</span><span class="tr-mark">{b}</span></li>
-        ))}
-      </ul>
+      <p class="hero-price">{t.heroPrice}</p>
+      <p class="gem-pill"><Gemini id="gem-hero" /><span>{t.poweredBy} <b>Gemini</b></span></p>
     </section>
 
-    {/* 문제 제기: 스크롤해 내려가는 만큼 낱말이 하나씩 진해진다(읽는 속도에 맞춘 강조). */}
-    <section class="statement wrap" data-statement>
-      <p>{words.map((w, i) => <><span class="w">{w}</span>{i < words.length - 1 ? joiner : ''}</>)}</p>
-    </section>
-
-    {/* 스크롤 장면: 회의 화면이 화면에 머물고, 스크롤한 만큼 대화가 진행된다(말 → 중간 번역 → 확정). */}
-    <section id="story" class="story" data-scrub="story" aria-label={t.navStory}>
-      <div class="story-pin">
-        <div class="wrap story-grid">
-          <ol class="story-steps">
-            {t.storySteps.map((s, i) => (
-              <li class={i === 0 ? 'is-active' : ''} data-step={i}>
-                <h2>{s.title}</h2>
-                <p>{s.body}</p>
-              </li>
-            ))}
-          </ol>
-          <div class="meeting" role="img" aria-label={t.storyLabel}>
-            <div class="meeting-tiles">
-              <div class="tile" data-tile="other"><Face who={t.otherFace} /><span class="tile-name" lang={t.otherNameLang}>{t.otherName}</span></div>
-              <div class="tile" data-tile="me"><Face who={t.meFace} /><span class="tile-name">{you(t.meName)}</span></div>
+    {/* 회의 예시: 앱의 회의 화면과 같은 모양(상대 타일, 내 타일, 대화 기록). 최신 줄이 가장 크고 진하다. */}
+    <section id="how" class="demo" aria-label={t.demoLabel}>
+      <div class="demo-frame">
+        <div class="demo-screen" role="img" aria-label={t.demoAlt}>
+          <div class="demo-tile">
+            <span class="avatar avatar-lg speaking" lang={people.other.lang} aria-hidden="true">{initial(people.other.name)}</span>
+            <span class="demo-name" lang={people.other.lang}>{people.other.name}</span>
+          </div>
+          <div class="demo-tile">
+            <span class="avatar avatar-lg" lang={people.me.lang} aria-hidden="true">{initial(people.me.name)}</span>
+            <span class="demo-name" lang={people.me.lang}>{people.me.name}</span>
+          </div>
+          <div class="hist">
+            <div class="hist-head"><b>{t.historyTitle}</b><span class="hist-live"><span class="bars" aria-hidden="true"><i></i><i></i><i></i></span>{t.historyListening}</span></div>
+            <div class="hist-lines">
+              {t.history.map((h, i) => (
+                <div class={`hl hl-${i}`}>
+                  <p class="hl-meta"><b lang={people[h.who].lang}>{people[h.who].name}</b><time>{h.time}</time></p>
+                  <p class="hl-src" lang={h.src[0]}>{h.src[1]}</p>
+                  <p class="hl-tr"><i aria-hidden="true"></i><span lang={h.tr[0]}>{h.tr[1]}</span></p>
+                </div>
+              ))}
             </div>
-            <div class="meeting-panel">
-              <div class="panel-head">
-                <b>{t.panelTitle}</b>
-                <span class="panel-langs"><span lang={t.panelLangs[0][0]}>{t.panelLangs[0][1]}</span> ⇄ <span lang={t.panelLangs[1][0]}>{t.panelLangs[1][1]}</span></span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="statement">
+      <p>{t.statement1} <span>{t.statement2}</span></p>
+    </section>
+
+    <section class="feature" aria-labelledby="f1">
+      <div class="feature-text">
+        <h2 id="f1" class="h-feature">{t.featureTitle1}<br />{t.featureTitle2}</h2>
+        <p class="lead-21">{t.featureBody}</p>
+      </div>
+      <div class="feature-card" role="img" aria-label={t.featureAlt}>
+        {t.featureLines.map((l, i) => (
+          <div class={`fl fl-${i}`}>
+            <p class="fl-src" lang={l.src[0]}>{l.src[1]}</p>
+            <p class="fl-tr" lang={l.tr[0]}>{l.tr[1]}</p>
+          </div>
+        ))}
+      </div>
+    </section>
+
+    {/* 번역 엔진: 속도(스트리밍)와 품질(맥락) */}
+    <section id="engine" class="sec" aria-labelledby="engine-title">
+      <div class="engine-head">
+        <p class="engine-eyebrow"><Gemini id="gem-engine" size={28} />{t.poweredBy} Gemini</p>
+        <h2 id="engine-title" class="h-xl">{t.engineTitle1}<br /><span class="gem-text">{t.engineTitle2}</span></h2>
+        <p class="lead-21 engine-lead">{t.engineLead}</p>
+      </div>
+      <div class="engine-cards">
+        <div class="speed-card">
+          <div>
+            <p class="eyebrow eyebrow-dark">{t.speedEyebrow}</p>
+            <p class="speed-title">{t.speedTitle}</p>
+            <p class="speed-body">{t.speedBody}</p>
+          </div>
+          <div class="speed-rows" aria-hidden="true">
+            {t.speedRows.map(([label, text], i) => (
+              <div class={`sr sr-${i}`}>
+                <span class="sr-label">{label}</span>
+                <span class="sr-text" lang={i === 0 ? t.speedSrcLang : t.lang}>{i > 0 && <i></i>}{text}</span>
               </div>
-              <div class="panel-feed">
-                {t.story.map((u, i) => (
-                  <div class="entry" data-entry={i}>
-                    <p class="entry-meta"><b lang={nameLang[u.who]}>{names[u.who]}</b><time>{times[i]}</time></p>
-                    <p lang={u.lang} data-src>{u.text}</p>
-                    <p class="tr-mark" lang={u.trLang} data-tr>{u.tr}</p>
+            ))}
+          </div>
+        </div>
+        <div class="context-card">
+          <div>
+            <p class="eyebrow">{t.contextEyebrow}</p>
+            <p class="context-title">{t.contextTitle1}<br />{t.contextTitle2}</p>
+            <p class="body-17">{t.contextBody}</p>
+          </div>
+          <div class="context-sample">
+            <p class="cs-q"><span lang={t.contextQ[0]}>{t.contextQ[1]}</span> → <b lang={t.contextA[0]}>{t.contextA[1]}</b></p>
+            <p class="cs-tr" lang={t.contextTr[0]}><i aria-hidden="true"></i>{t.contextTr[1]}</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="modes" class="sec" aria-labelledby="modes-title">
+      <h2 id="modes-title" class="h-lg center">{t.modesTitle}</h2>
+      <p class="lead-21 modes-lead">{t.modesLead}</p>
+      <div class="modes-grid">
+        <div class="mode mode-video">
+          <div class="mode-video-text">
+            <p class="eyebrow eyebrow-dark">{t.modeVideo.eyebrow}</p>
+            <h3 class="mode-video-title">{t.modeVideo.title1}<br />{t.modeVideo.title2}</h3>
+            <p class="mode-video-body">{t.modeVideo.body}</p>
+          </div>
+          <div class="vm" aria-hidden="true">
+            <div class="vm-tile"><span class="avatar avatar-md speaking" lang={people.other.lang}>{initial(people.other.name)}</span><span lang={people.other.lang}>{people.other.name}</span></div>
+            <div class="vm-tile"><span class="avatar avatar-md" lang={people.me.lang}>{initial(people.me.name)}</span><span lang={people.me.lang}>{people.me.name}</span></div>
+            <div class="hist hist-mini">
+              <div class="hist-head"><b>{t.historyTitle}</b><span class="hist-live"><span class="bars"><i></i><i></i><i></i></span>{t.historyListening}</span></div>
+              <div class="hist-lines">
+                {[h0, h2].map((h, i) => (
+                  <div class={`hl hm-${i}`}>
+                    <p class="hl-meta"><b lang={people[h.who].lang}>{people[h.who].name}</b><time>{h.time}</time></p>
+                    <p class="hl-src" lang={h.src[0]}>{h.src[1]}</p>
+                    <p class="hl-tr"><i></i><span lang={h.tr[0]}>{h.tr[1]}</span></p>
                   </div>
                 ))}
               </div>
             </div>
           </div>
         </div>
-      </div>
-      <script type="application/json" data-story set:html={JSON.stringify({ story: t.story, translating: t.translating })} />
-    </section>
 
-    {/* 번역 엔진: 속도(스트리밍)와 품질(맥락). */}
-    <section id="engine" class="wrap section engine" aria-labelledby="engine-title">
-      <div class="engine-head">
-        <p class="engine-eyebrow"><Gemini id="gem-engine" size={28} />Powered by Gemini</p>
-        <h2 id="engine-title" class="engine-title">{t.engineTitle1}<br /><span class="gem-text">{t.engineTitle2}</span></h2>
-        <p class="section-lead">{t.engineLead}</p>
-      </div>
-      <div class="engine-cards">
-        <div class="speed-card">
+        <div class="mode mode-light">
           <div>
-            <p class="eyebrow">{t.speedEyebrow}</p>
-            <p class="speed-title">{t.speedTitle}</p>
-            <p class="card-body">{t.speedBody}</p>
+            <p class="eyebrow">{t.modeInPerson.eyebrow}</p>
+            <h3 class="mode-title">{t.modeInPerson.title1}<br />{t.modeInPerson.title2}</h3>
+            <p class="body-17 mode-body">{t.modeInPerson.body}</p>
           </div>
-          <ol class="speed-rows" aria-hidden="true">
-            {t.speedRows.map(([label, text], i) => (
-              <li class={`speed-row r${i}`}><span class="speed-label">{label}</span><span class={i ? 'tr-mark' : ''} lang={i ? t.lang : t.speedSrcLang}>{text}</span></li>
-            ))}
-          </ol>
+          {/* 휴대폰 하나: 위쪽 반은 마주 앉은 상대를 향해 뒤집혀 있다 */}
+          <div class="phone" aria-hidden="true">
+            <div class="phone-top"><span class="ph-src" lang={t.phoneTop.src[0]}>{t.phoneTop.src[1]}</span><span class="ph-tr" lang={t.phoneTop.tr[0]}>{t.phoneTop.tr[1]}</span></div>
+            <div class="phone-bottom"><span class="ph-src" lang={t.phoneBottom.src[0]}>{t.phoneBottom.src[1]}</span><span class="ph-tr" lang={t.phoneBottom.tr[0]}>{t.phoneBottom.tr[1]}</span><span class="ph-btn">{t.phoneButton}</span></div>
+          </div>
         </div>
-        <div class="context-card">
+
+        <div class="mode mode-light">
           <div>
-            <p class="eyebrow">{t.contextEyebrow}</p>
-            <p class="context-title">{t.contextTitle1}<br />{t.contextTitle2}</p>
-            <p class="card-body">{t.contextBody}</p>
+            <p class="eyebrow">{t.modeCaptions.eyebrow}</p>
+            <h3 class="mode-title">{t.modeCaptions.title1}<br />{t.modeCaptions.title2}</h3>
+            <p class="body-17 mode-body">{t.modeCaptions.body}</p>
           </div>
-          <div class="context-sample">
-            <p><span lang={t.contextQ[0]}>{t.contextQ[1]}</span> → <b lang={t.contextA[0]}>{t.contextA[1]}</b></p>
-            <p class="tr-mark" lang={t.contextTr[0]}>{t.contextTr[1]}</p>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    {/* 세 가지 자리: 기기 화면이 머물고, 스크롤에 따라 화상 → 대면 → 자막 화면으로 바뀐다. */}
-    <section id="modes" class="modes" data-scrub="modes" aria-labelledby="modes-title">
-      <div class="modes-pin">
-        <div class="wrap">
-          <h2 id="modes-title" class="section-title">{t.modesTitle}</h2>
-          <div class="modes-grid">
-            {t.modes.map((m, i) => (
-              <article class={`mode${i === 0 ? ' is-active' : ''}`} data-mode={i}>
-                <div class={`device device-${i}`} aria-hidden="true">
-                  {i === 0 && (
-                    <div class="mock-video">
-                      <div class="mv-tiles"><div class="tile"><Face who="sakura" /></div><div class="tile"><Face who="minjun" /></div></div>
-                      <div class="mv-panel"><i></i><i class="tr"></i><i></i><i class="tr"></i></div>
-                    </div>
-                  )}
-                  {i === 1 && (
-                    <div class="mock-phone">
-                      <div class="mp-half far"><span lang="ko">네, 감사합니다.</span><small class="tr-mark" lang="ja">はい、ありがとうございます。</small></div>
-                      <div class="mp-half"><span lang="ja">はい、ありがとうございます。</span><small class="tr-mark" lang="ko">네, 감사합니다.</small></div>
-                    </div>
-                  )}
-                  {i === 2 && (
-                    <div class="mock-tablet">
-                      <div class="mt-line"><small lang="ja">本日はありがとうございます。</small><span class="tr-mark" lang="ko">오늘 감사합니다.</span></div>
-                      <div class="mt-line"><small lang="ko">먼저 소개해 드릴게요.</small><span class="tr-mark" lang="ja">まずご紹介します。</span></div>
-                      <div class="mt-line dim"><small lang="ja">予算について</small><span class="tr-mark" lang="ko">예산에 대해</span></div>
-                    </div>
-                  )}
-                </div>
-                <div class="mode-text">
-                  <span class="mode-bars" aria-hidden="true">{t.modes.map((_, k) => <i class={k === i ? 'on' : ''}></i>)}</span>
-                  <h3>{m.title}</h3>
-                  <p>{m.body}</p>
-                </div>
-              </article>
-            ))}
+          <div class="tablet" aria-hidden="true">
+            <p class="tb-0" lang={t.tabletPast[0][0]}>{t.tabletPast[0][1]}</p>
+            <p class="tb-1" lang={t.tabletPast[1][0]}>{t.tabletPast[1][1]}</p>
+            <div><p class="tb-src" lang={t.tabletNow.src[0]}>{t.tabletNow.src[1]}</p><p class="tb-tr" lang={t.tabletNow.tr[0]}>{t.tabletNow.tr[1]}</p></div>
           </div>
         </div>
       </div>
     </section>
 
-    <section class="wrap section" aria-labelledby="details-title">
-      <h2 id="details-title" class="section-title">{t.detailsTitle}</h2>
-      <dl class="details">
+    <section class="sec" aria-labelledby="details-title">
+      <h2 id="details-title" class="h-md">{t.detailsTitle}</h2>
+      <ul class="details">
         {t.details.map((d) => (
-          <div>
-            <dt>{d.title}</dt>
-            <dd>{d.body}</dd>
-          </div>
+          <li>
+            <h3>{d.title}</h3>
+            <p class="body-17">{d.body}</p>
+          </li>
         ))}
-      </dl>
+      </ul>
     </section>
 
-    {/* 개인정보: 자막이 나타났다가 흩어져 사라진다(남기지 않음). 두 사람 사이엔 암호화된 신호 점만 오간다. CSS 애니메이션뿐(스크립트 없음). */}
+    {/* 개인정보: 자막이 글자마다 나타났다가 흩어져 사라진다(저장하지 않음). 신호 점만 두 사람 사이를 오간다. */}
     <section id="privacy" class="privacy" aria-labelledby="privacy-title">
-      <div class="wrap">
-        <h2 id="privacy-title" class="privacy-title">{t.privacyTitle1}<br />{t.privacyTitle2}</h2>
-        <p class="privacy-lead">{t.privacyLead}</p>
-        <div class="pv-stage" data-pv>
-          <div class="pv-scene" role="img" aria-label={t.privacyStageLabel}>
-          <div class="pv-lines" aria-hidden="true">
+      <h2 id="privacy-title" class="h-xl">{t.privacyTitle1}<br />{t.privacyTitle2}</h2>
+      <p class="privacy-lead">{t.privacyLead}</p>
+      <div class="pv-stage">
+        {/* 계속 도는 움직임이라 멈출 수 있게 한다(WCAG 2.2.2). 스크립트 없이 체크 상자로. */}
+        <input class="pv-pause sr-only" type="checkbox" id="pv-pause" />
+        <div class="pv-scene" role="img" aria-label={t.privacyStageLabel}>
+          <div class="pv-lines">
             {privacyLines.map((l) => (
-              <div class="pv-line">
-                <p class="pv-src"><b class="pv-ch" lang={l.nameLang} style={`--d:${l.d}`}>{l.name}</b>{'\u00a0\u00a0'}<span lang={l.lang}>{l.src.map((x) => <span class="pv-ch" style={`--d:${x.d}`}>{x.c}</span>)}</span></p>
-                <p class="pv-tr"><i class="pv-ch" style={`--d:${l.d}`}></i><span lang={l.trLang}>{l.out.map((x) => <span class="pv-ch" style={`--d:${x.d}`}>{x.c}</span>)}</span></p>
+              <div class="pv-line" aria-hidden="true">
+                <p class="pv-src"><b class="pv-ch" lang={l.who.lang} style={l.d}>{l.who.name}</b>{'\u00a0\u00a0'}<span lang={l.src[0]}>{l.srcWords.map((w) => (w.space ? ' ' : <span class="pv-w">{w.chars.map((x) => <span class="pv-ch" style={x.d}>{x.c}</span>)}</span>))}</span></p>
+                <p class="pv-tr"><i class="pv-ch" style={l.d}></i><span lang={l.tr[0]}>{l.trWords.map((w) => (w.space ? ' ' : <span class="pv-w">{w.chars.map((x) => <span class="pv-ch" style={x.d}>{x.c}</span>)}</span>))}</span></p>
               </div>
             ))}
           </div>
           <div class="pv-people" aria-hidden="true">
-            <div class="pv-person"><span class="pv-avatar on" lang={t.lang}>{[...t.meName][0]}</span><span>{t.meName}</span></div>
+            <div class="pv-person"><span class="avatar avatar-sm speaking" lang={people.me.lang}>{initial(people.me.name)}</span><span lang={people.me.lang}>{people.me.name}</span></div>
             <div class="pv-mid">
               <div class="pv-wire">
-                <span class="pv-line-bg"></span>
-                {dots.map((i) => <i class="pv-dot" style={`--d:${(-0.45 * i).toFixed(2)}s`}></i>)}
-                {dots.map((i) => <i class="pv-dot pv-rev" style={`--d:${(-0.2 - 0.45 * i).toFixed(2)}s`}></i>)}
+                <span class="pv-wire-line"></span>
+                {dots.map((i) => <i class="pv-dot" style={`animation-delay: ${(-0.45 * i).toFixed(2)}s`}></i>)}
+                {dots.map((i) => <i class="pv-dot pv-rev" style={`animation-delay: ${(-0.2 - 0.45 * i).toFixed(2)}s`}></i>)}
               </div>
-              <span class="pv-wire-label">{t.privacyWire}</span>
+              <span class="pv-wire-label"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2.5" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>{t.privacyWire}</span>
             </div>
-            <div class="pv-person"><span class="pv-avatar" lang={t.otherNameLang}>{[...t.otherName][0]}</span><span lang={t.otherNameLang}>{t.otherName}</span></div>
+            <div class="pv-person"><span class="avatar avatar-sm" lang={people.other.lang}>{initial(people.other.name)}</span><span lang={people.other.lang}>{people.other.name}</span></div>
           </div>
-          </div>
-          <ul class="pv-chips">
-            {t.privacyChips.map(([a, b, c]) => <li class="pv-chip">{a}<b>{b}</b>{c}</li>)}
-          </ul>
-          {/* 계속 도는 움직임이라 멈출 수 있게 한다(WCAG 2.2.2). */}
-          <button class="pv-toggle" type="button" data-pv-toggle data-labels={JSON.stringify({ pause: t.privacyPause, play: t.privacyPlay })}>{t.privacyPause}</button>
         </div>
-        <a class="privacy-link" href={LEGAL.privacy} hreflang={LEGAL.lang}>{t.privacyLink} ›</a>
+        <ul class="pv-chips">
+          {t.privacyChips.map(([a, b, c]) => <li class="pv-chip">{a}<b>{b}</b>{c}</li>)}
+        </ul>
+        <label class="pv-toggle" for="pv-pause">
+          <svg class="i-pause" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path fill="currentColor" d="M3 2h2v8H3zM7 2h2v8H7z" /></svg>
+          <svg class="i-play" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path fill="currentColor" d="M3 1.8v8.4L10 6z" /></svg>
+          {t.privacyPause}
+        </label>
       </div>
+      <a class="privacy-link" href={LEGAL.privacy} hreflang={LEGAL.lang}>{t.privacyLink}<span aria-hidden="true"> ›</span></a>
     </section>
 
-    <section id="pricing" class="wrap section" aria-labelledby="pricing-title">
-      <h2 id="pricing-title" class="section-title">{t.pricingTitle}</h2>
-      <p class="section-lead">{t.pricingLead}</p>
-      {/* 넓은 화면: 요금제 두 장 + 포함 항목 한 칸. 중간 폭: 두 장 아래에 포함 항목. 휴대폰: 한 줄씩. */}
-      <div class="pricing-grid">
+    <section id="pricing" class="sec" aria-labelledby="pricing-title">
+      <h2 id="pricing-title" class="h-lg center">{t.pricingTitle}</h2>
+      <p class="pricing-lead">{t.pricingLead}</p>
+      <div class="plans">
         {t.plans.map((p, i) => (
-          <div class={`plan${i === 0 ? ' plan-main' : ''}`}>
+          <div class="plan">
             <h3>{p.name}</h3>
-            <p class="plan-price"><span>{p.price}</span><small>{p.unit}</small></p>
-            <p class="plan-hours">{p.hours}</p>
+            <p class="plan-price">{p.price}<span>{p.unit}</span></p>
             <p class="plan-note">{p.note}</p>
-            <a class={`btn ${i === 0 ? 'btn-cta' : 'btn-ink'}`} href={SIGNUP_URL}>{p.cta}</a>
+            <a class={`btn plan-cta ${i === 0 ? 'btn-cta' : 'btn-ink'}`} href={SIGNUP_URL}>{p.cta}</a>
           </div>
         ))}
-        <div class="includes">
-          <h3>{t.includesTitle}</h3>
-          <ul>{t.includes.map((x) => <li class="tr-mark">{x}</li>)}</ul>
-          <p class="plans-extra">{t.pricingExtra}</p>
-          <p class="plans-fine">{t.pricingFine}</p>
-        </div>
       </div>
+      <p class="pricing-fine">{t.pricingFine}</p>
     </section>
 
-    <section id="faq" class="wrap section" aria-labelledby="faq-title">
-      <h2 id="faq-title" class="section-title">{t.faqTitle}</h2>
-      <div class="faq">
-        {t.faq.map((f) => (
-          <details>
-            <summary>{f.q}</summary>
-            <p>{f.a}</p>
-          </details>
-        ))}
-      </div>
+    <section id="faq" class="sec faq" aria-labelledby="faq-title">
+      <h2 id="faq-title" class="h-md">{t.faqTitle}</h2>
+      {t.faq.map((f, i) => (
+        <details open={i === 0}>
+          <summary>{f.q}</summary>
+          <p>{f.a}</p>
+        </details>
+      ))}
     </section>
 
-    <section class="wrap closing" data-reveal>
-      <p class="pair-title closing-title">
-        <span class="pt-1">{t.closingLine1}</span>
-        <span class="pt-2"><i class="pt-bar" aria-hidden="true"></i>{t.closingLine2}</span>
-      </p>
-      <a class="btn btn-cta btn-lg" href={SIGNUP_URL}>{t.getStarted}</a>
+    <section class="closing">
+      <Mark size={72} />
+      <p class="h-xl closing-title">{t.closingTitle1}<br />{t.closingTitle2}</p>
+      <a class="btn btn-cta closing-cta" href={SIGNUP_URL}>{t.getStarted}</a>
     </section>
   </main>
 
-  <footer class="foot">
-    <div class="wrap foot-grid">
-      <div class="foot-brand">
-        <a class="brand" href={t.path} aria-label="Tolkmeet"><Mark size={24} /><span>tolkmeet</span></a>
-        <p>{t.footerCopyright}</p>
+  <footer class="ft">
+    <div class="ft-in">
+      <p class="ft-note">{t.footerDisclaimer}</p>
+      <div class="ft-rule"></div>
+      <div class="ft-cols">
+        <div class="ft-brand">
+          <span class="ft-logo"><Mark size={20} />tolkmeet</span>
+          <span class="ft-tag">{t.heroTitle1}<br />{t.heroTitle2}</span>
+          <a class="ft-gh" href={GITHUB_URL}><svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56v-2c-3.2.7-3.87-1.37-3.87-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.03 1.76 2.69 1.25 3.35.96.1-.75.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.28 1.18-3.09-.12-.29-.51-1.46.11-3.04 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.58.23 2.75.11 3.04.74.81 1.18 1.83 1.18 3.09 0 4.42-2.69 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.68.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z" /></svg>{t.footerGithub}</a>
+        </div>
+        <nav class="ft-col" aria-labelledby="ft-product">
+          <span id="ft-product" class="ft-h">{t.footerProduct}</span>
+          <a href="#modes">{t.modeVideo.eyebrow}</a>
+          <a href="#modes">{t.modeInPerson.eyebrow}</a>
+          <a href="#modes">{t.modeCaptions.eyebrow}</a>
+          <a href="#pricing">{t.navPricing}</a>
+        </nav>
+        <nav class="ft-col" aria-labelledby="ft-support">
+          <span id="ft-support" class="ft-h">{t.footerSupport}</span>
+          <a href="#faq">{t.navFaq}</a>
+          <a href={`mailto:${COMPANY.email}`}>{t.footerContact}</a>
+        </nav>
+        <nav class="ft-col" aria-labelledby="ft-company">
+          <span id="ft-company" class="ft-h">{t.footerCompany}</span>
+          <a href={GITHUB_URL}>GitHub (AGPL-3.0)</a>
+          <a href="#privacy">{t.footerSecurity}</a>
+        </nav>
+        <nav class="ft-col" aria-labelledby="ft-legal">
+          <span id="ft-legal" class="ft-h">{t.footerLegal}</span>
+          <a href={LEGAL.privacy} hreflang={LEGAL.lang}>{t.legalPrivacy}</a>
+          <a href={LEGAL.terms} hreflang={LEGAL.lang}>{t.legalTerms}</a>
+          <a href={LEGAL.refund} hreflang={LEGAL.lang}>{t.legalRefund}</a>
+        </nav>
       </div>
-      <nav aria-label={t.footerProduct}>
-        <h2>{t.footerProduct}</h2>
-        <a href="#story">{t.navStory}</a>
-        <a href="#modes">{t.navModes}</a>
-        <a href="#pricing">{t.navPricing}</a>
-        <a href="#faq">{t.navFaq}</a>
-        <a href={SIGN_IN_URL}>{t.signIn}</a>
-      </nav>
-      <nav aria-label={t.footerLegal}>
-        <h2>{t.footerLegal}</h2>
-        <a href={LEGAL.privacy} hreflang={LEGAL.lang}>{t.legalPrivacy}</a>
-        <a href={LEGAL.terms} hreflang={LEGAL.lang}>{t.legalTerms}</a>
-        <a href={LEGAL.refund} hreflang={LEGAL.lang}>{t.legalRefund}</a>
-      </nav>
-      <div class="foot-col">
-        <h2 id="foot-lang">{t.languageLabel}</h2>
-        <ul class="foot-list" aria-labelledby="foot-lang">
-          {LOCALES.map((l) => <li><a href={l.path} hreflang={l.lang} lang={l.lang} aria-current={l.lang === t.lang ? 'page' : undefined}>{l.langName}</a></li>)}
-        </ul>
-      </div>
-      <div class="foot-col">
-        <h2>{t.footerOpenSource}</h2>
-        <a class="foot-gh" href={GITHUB_URL} rel="noopener">
-          <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
-          {t.footerGithub}
-        </a>
+      <div class="ft-rule"></div>
+      <div class="ft-bottom">
+        <div class="ft-id">
+          <p>© 2026 <span lang={t.lang === 'ko' ? undefined : 'ko'}>{COMPANY.name}</span>. {t.footerRights}</p>
+          <Business dict={t} class="ft-biz" />
+        </div>
+        <p class="ft-langs">
+          {LOCALES.map((l) => <a href={l.path} hreflang={l.lang} lang={l.lang} aria-current={l.lang === t.lang ? 'page' : undefined}>{l.langName}</a>)}
+        </p>
       </div>
     </div>
-    <p class="wrap foot-note">{t.footerDisclaimer}</p>
-    <Business dict={t} class="wrap foot-biz" />
   </footer>
-
-  <script is:inline>
-    ;(() => {
-      const d = document.documentElement
-
-      // ── 테마: 시스템 → 라이트 → 다크 순서로 바꾼다. 선택은 이 브라우저에만 저장한다.
-      const btn = document.querySelector('[data-theme-cycle]')
-      const labels = JSON.parse(btn.dataset.labels)
-      const current = () => d.dataset.theme || 'system'
-      const show = () => { btn.dataset.current = current(); btn.setAttribute('aria-label', `${labels.label}: ${labels[current()]}`); btn.title = btn.getAttribute('aria-label') }
-      show()
-      btn.addEventListener('click', () => {
-        const next = { system: 'light', light: 'dark', dark: 'system' }[current()]
-        if (next === 'system') delete d.dataset.theme
-        else d.dataset.theme = next
-        try { next === 'system' ? localStorage.removeItem('tolkmeet.theme') : localStorage.setItem('tolkmeet.theme', next) } catch {}
-        show()
-      })
-
-      if (!d.classList.contains('motion')) return
-
-      // ── 스크롤 장면. 고정 구역마다 진행률(0~1)을 계산해 그 구역의 그리기 함수에 넘긴다.
-      const clamp = (v) => Math.min(1, Math.max(0, v))
-      const storyEl = document.querySelector('[data-scrub="story"]')
-      const modesEl = document.querySelector('[data-scrub="modes"]')
-      const data = JSON.parse(storyEl.querySelector('[data-story]').textContent)
-      const entries = [...storyEl.querySelectorAll('[data-entry]')].map((el) => ({ el, src: el.querySelector('[data-src]'), tr: el.querySelector('[data-tr]'), last: '' }))
-      const steps = [...storyEl.querySelectorAll('[data-step]')]
-      const tiles = { other: storyEl.querySelector('[data-tile="other"]'), me: storyEl.querySelector('[data-tile="me"]') }
-      const modes = [...modesEl.querySelectorAll('[data-mode]')]
-      const header = document.querySelector('.top')
-      const n = data.story.length
-      const START = 0.06, SPAN = 0.86 / n
-
-      function drawStory(p) {
-        let speaking = null
-        let step = 0
-        data.story.forEach((u, i) => {
-          const e = entries[i]
-          const local = (p - START - i * SPAN) / SPAN
-          const visible = local >= 0
-          e.el.classList.toggle('off', !visible)
-          if (!visible) return
-          step = i
-          const chars = [...u.text]
-          const typed = clamp(local / 0.5)
-          const pending = local < 0.72
-          let tr
-          if (typed < 1) {
-            const k = Math.floor(typed * (u.drafts.length + 1)) - 1
-            tr = k >= 0 ? u.drafts[k] : data.translating
-          } else tr = pending ? u.drafts[u.drafts.length - 1] : u.tr
-          const src = chars.slice(0, Math.max(1, Math.ceil(typed * chars.length))).join('')
-          const key = src + '|' + tr + '|' + pending
-          if (key !== e.last) {
-            e.last = key
-            e.src.textContent = src
-            e.tr.textContent = tr
-            e.el.classList.toggle('pending', pending)
-            e.el.classList.toggle('typing', typed < 1)
-          }
-          if (typed < 1) speaking = u.who
-        })
-        // 설명 단계: 첫 문장 = 받아 적기, 번역이 나오기 시작하면 = 번역, 마지막 문장 = 맥락
-        const firstTr = (p - START) / SPAN >= 0.5
-        const idx = step >= n - 1 ? 2 : firstTr ? 1 : 0
-        steps.forEach((s, i) => s.classList.toggle('is-active', i === idx))
-        tiles.other.classList.toggle('speaking', speaking === 'other')
-        tiles.me.classList.toggle('speaking', speaking === 'me')
-      }
-
-      function drawModes(p) {
-        const idx = Math.min(modes.length - 1, Math.floor(p * modes.length))
-        modes.forEach((m, i) => m.classList.toggle('is-active', i === idx))
-      }
-
-      const privacyEl = document.getElementById('privacy')
-      const statementEl = document.querySelector('[data-statement]')
-      const statementWords = [...statementEl.querySelectorAll('.w')]
-      let lit = -1
-      const meetingEl = storyEl.querySelector('.meeting')
-      const stepsEl = storyEl.querySelector('.story-steps')
-      const set = (el, name, value) => { if (el.style.getPropertyValue(name) !== value) el.style.setProperty(name, value) }
-      let ticking = false
-      function frame() {
-        ticking = false
-        // 읽기를 먼저 모두 하고(레이아웃 1번), 그다음 쓴다. 값이 바뀔 때만 쓴다.
-        const vh = innerHeight
-        const sr = storyEl.getBoundingClientRect()
-        const mr = modesEl.getBoundingClientRect()
-        const hh = header.offsetHeight
-        const tr = statementEl.firstElementChild.getBoundingClientRect()
-        if (sr.bottom > -vh && sr.top < vh * 2) {
-          const p = clamp(-sr.top / (sr.height - vh))
-          // 다가오는 동안(0→1): 회의 화면이 기울어진 채 떠오르다 평평해진다
-          set(meetingEl, '--a', clamp(1 - sr.top / vh).toFixed(3))
-          set(stepsEl, '--p', p.toFixed(3))
-          drawStory(p)
-        }
-        if (mr.bottom > -vh && mr.top < vh * 2) drawModes(clamp(-mr.top / (mr.height - vh)))
-        // 문장 윗줄이 화면 85% 높이에 닿으면 시작하고, 마지막 줄이 화면 55% 높이에 오면 다 진해진다(머리말에 가리기 전에 끝난다)
-        const k = Math.round(clamp((vh * 0.85 - tr.top) / (tr.height + vh * 0.3)) * statementWords.length)
-        if (k !== lit) { lit = k; statementWords.forEach((w, i) => w.classList.toggle('on', i < k)) }
-        header.classList.toggle('scrolled', scrollY > 8)
-        // 어두운 회의 장면 위를 지나는 동안 머리도 어둡게(흐린 회색으로 비치지 않게)
-        const pr = privacyEl.getBoundingClientRect()
-        header.classList.toggle('on-dark', (sr.top <= hh && sr.bottom >= hh) || (pr.top <= hh && pr.bottom >= hh))
-      }
-      const request = () => { if (!ticking) { ticking = true; requestAnimationFrame(frame) } }
-      addEventListener('scroll', request, { passive: true })
-      addEventListener('resize', request)
-      frame()
-
-      // 개인정보 장면: 화면에 보일 때만 움직이고(안 보이면 그리지 않게), 버튼으로 멈출 수 있다.
-      const pv = document.querySelector('[data-pv]')
-      const pvToggle = pv.querySelector('[data-pv-toggle]')
-      const pvLabels = JSON.parse(pvToggle.dataset.labels)
-      new IntersectionObserver(([x]) => pv.classList.toggle('pv-run', x.isIntersecting)).observe(pv)
-      pvToggle.addEventListener('click', () => {
-        const paused = pv.classList.toggle('pv-paused')
-        pvToggle.textContent = paused ? pvLabels.play : pvLabels.pause
-      })
-
-      // 마지막 문장: 화면에 들어오면 한 번 두 줄이 맞춰 선다
-      const io = new IntersectionObserver((list) => list.forEach((x) => { if (x.isIntersecting) { x.target.classList.add('in'); io.unobserve(x.target) } }), { threshold: 0.4 })
-      document.querySelectorAll('[data-reveal]').forEach((el) => io.observe(el))
-    })()
-  </script>
 </Base>

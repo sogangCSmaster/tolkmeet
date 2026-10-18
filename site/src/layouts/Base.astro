@@ -1,7 +1,7 @@
 ---
 import type { Dict } from '../i18n/en'
 import { LOCALES, SITE_URL } from '../site'
-import '../styles/site.css'
+// 스타일은 페이지마다 따로 가져온다: 소개 페이지는 landing.css, 약관·없는 페이지는 site.css(테마 토큰 포함).
 
 interface Props {
   t: Dict
@@ -9,19 +9,21 @@ interface Props {
   jsonLd?: object[]
   /** 없는 페이지 등: 검색에 올리지 않고 대표 주소·언어 대안도 걸지 않는다. */
   noindex?: boolean
+  /** 밝은 화면만 쓰는 페이지(소개 페이지): 테마 스크립트 없이 data-theme="light"로 고정한다. */
+  lightOnly?: boolean
 }
-const { t, jsonLd = [], noindex = false } = Astro.props
+const { t, jsonLd = [], noindex = false, lightOnly = false } = Astro.props
 const canonical = new URL(t.path, SITE_URL).href
 const ogImage = new URL(`/og-${t.lang}.png`, SITE_URL).href
 const ogLocale = { en: 'en_US', ko: 'ko_KR', ja: 'ja_JP' }[t.lang]
 ---
 <!doctype html>
-<html lang={t.htmlLang}>
+<html lang={t.htmlLang} data-theme={lightOnly ? 'light' : undefined}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     {/* 그리기 전에 테마(저장된 선택, 없으면 시스템)와 움직임 허용 여부를 정한다. 깜빡임 없이 첫 화면이 맞는 색으로 뜬다. */}
-    <script is:inline>
+    {!lightOnly && <script is:inline>
       ;(() => {
         const d = document.documentElement
         try {
@@ -30,7 +32,7 @@ const ogLocale = { en: 'en_US', ko: 'ko_KR', ja: 'ja_JP' }[t.lang]
         } catch {}
         if (!matchMedia('(prefers-reduced-motion: reduce)').matches) d.classList.add('motion')
       })()
-    </script>
+    </script>}
     <title>{t.metaTitle}</title>
     <meta name="description" content={t.metaDescription} />
     {noindex ? (
@@ -58,7 +60,7 @@ const ogLocale = { en: 'en_US', ko: 'ko_KR', ja: 'ja_JP' }[t.lang]
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/site.webmanifest" />
-    <meta name="color-scheme" content="light dark" />
+    <meta name="color-scheme" content={lightOnly ? 'light' : 'light dark'} />
 
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
     {/* 앱과 같은 글꼴. dynamic subset이라 화면에 쓰인 글자 범위의 조각만 받는다. crossorigin으로 preconnect한 연결을 같이 쓴다. */}
