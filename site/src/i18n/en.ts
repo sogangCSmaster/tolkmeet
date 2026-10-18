@@ -192,6 +192,8 @@ export const en = {
     { item: 'day', name: 'Day pass', price: '$12', unit: ' /24 hours', note: 'Up to 3 hours of translated meetings within 24 hours · One payment, no subscription', cta: 'Get a day pass' },
   ],
   pricingFine: 'Every plan: all three ways to meet, nine languages and saved captions. Subscribers can add hours at $3 each in a busy month. US dollars, plus tax where applicable.',
+  pricingDay: 'Day pass: one payment, no subscription. Use up to 3 hours within 24 hours of paying; time left after that ends. You can buy another once it’s used up.',
+  pricingRefund: 'Refunds within 14 days of a payment: we return what you paid minus the time you used ($3 an hour) and payment processing costs (5% + $0.50).',
 
   faqTitle: 'Questions.',
   faq: [
