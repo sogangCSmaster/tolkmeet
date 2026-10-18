@@ -105,6 +105,26 @@ export const en = {
     ['ja', 'まず弊社のサービスをご紹介します。'],
   ] as Said[],
   tabletNow: { src: ['ja', '予算について確認したいです。'], tr: ['en', 'I’d like to go over the budget.'] } as Pair,
+  // 세 가지 자리 카드에 마우스를 올리면 위의 정적 화면에서 이어지는 대화. 화상 회의는 대화 기록에 쌓이고,
+  // 대면 대화는 me의 말이 위쪽 반(상대 쪽)에, other의 말이 아래쪽 반(내 쪽)에 나오며, 자막 화면은 새 자막이 올라온다.
+  liveVideo: [
+    { who: 'me', time: '15:03', src: ['en', 'Sure. How about 2 p.m. on Thursday?'], tr: ['ja', 'はい、木曜日の午後2時はいかがですか？'] },
+    { who: 'other', time: '15:04', src: ['ja', '大丈夫です。招待リンクを送ってください。'], tr: ['en', 'That works. Please send me the invite link.'] },
+    { who: 'me', time: '15:04', src: ['en', 'I’ll send it right now.'], tr: ['ja', '今すぐお送りします。'] },
+    { who: 'other', time: '15:05', src: ['ja', 'ありがとうございます。届きました。'], tr: ['en', 'Thanks, it just came in.'] },
+  ] as HistoryLine[],
+  livePhone: [
+    { who: 'me', src: ['en', 'It’ll be at our office.'], tr: ['ja', '場所は弊社のオフィスです。'] },
+    { who: 'other', src: ['ja', 'わかりました。何時に伺えばいいですか？'], tr: ['en', 'Got it. What time should I come by?'] },
+    { who: 'me', src: ['en', 'Let’s meet in the lobby at 2 p.m.'], tr: ['ja', '午後2時にロビーで会いましょう。'] },
+    { who: 'other', src: ['ja', '楽しみにしています。'], tr: ['en', 'Looking forward to it.'] },
+  ] as PrivacyLine[],
+  liveTablet: [
+    { src: ['en', 'Of course. We’ve prepared a quote for each plan.'], tr: ['ja', 'もちろんです。プランごとのお見積もりをご用意しました。'] },
+    { src: ['ja', '導入までどのくらいかかりますか？'], tr: ['en', 'How long does it take to get set up?'] },
+    { src: ['en', 'Two weeks is usually plenty.'], tr: ['ja', '通常は2週間で十分です。'] },
+    { src: ['ja', 'それなら来月から始められそうです。'], tr: ['en', 'Then we could start next month.'] },
+  ] as Pair[],
 
   detailsTitle: 'What matters in a meeting.',
   // 카드마다 짧은 움직임 장면이 있다(scene: 장면 이름, desc: 장면이 보여 주는 것 한 문장. 대화 상자의 설명이 된다).

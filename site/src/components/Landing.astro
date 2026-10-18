@@ -216,25 +216,27 @@ const jsonLd = [
       <h2 id="modes-title" class="h-lg center">{t.modesTitle}</h2>
       <p class="lead-21 modes-lead">{t.modesLead}</p>
       <div class="modes-grid">
-        {/* 마우스를 올리면(터치 화면은 카드가 보이면) 화면이 실제로 돌아가듯 움직인다. data-lv-dur는 한 바퀴(초),
-            data-lv는 그 줄이 흘러 들어오기 시작하는 시각, data-lv-talk는 말하는 표시가 켜지는 구간, data-lv-rise는 새 줄에 밀려 올라가는 줄. */}
-        <div class="mode mode-video" data-lv-dur="5.6">
+        {/* 마우스를 올리면(터치 화면은 카드가 보이면) 아래의 정적 화면에서 대화가 이어진다. data-live-turns가 이어지는 말들이고,
+            맨 아래 스크립트가 한 마디씩 넣는다. */}
+        <div class="mode mode-video" data-live="video" data-live-turns={JSON.stringify(t.liveVideo.map((h) => ({ ...h, name: people[h.who] })))}>
           <div class="mode-video-text">
             <p class="eyebrow eyebrow-dark">{t.modeVideo.eyebrow}</p>
             <h3 class="mode-video-title">{t.modeVideo.title1}<br />{t.modeVideo.title2}</h3>
             <p class="mode-video-body">{t.modeVideo.body}</p>
           </div>
-          <div class="vm" aria-hidden="true" data-lv-talk="0.6-2.4">
+          <div class="vm" aria-hidden="true">
             <div class="vm-tile"><span class="avatar avatar-md speaking" lang={people.other.lang}>{initial(people.other.name)}</span><span lang={people.other.lang}>{people.other.name}</span></div>
             <div class="vm-tile"><span class="avatar avatar-md" lang={people.me.lang}>{initial(people.me.name)}</span><span lang={people.me.lang}>{people.me.name}</span></div>
             <div class="hist hist-mini">
               <div class="hist-head"><b>{t.historyTitle}</b><span class="hist-live"><span class="bars"><i></i><i></i><i></i></span>{t.historyListening}</span></div>
               <div class="hist-lines">
+                {/* 대화가 이어질 때 쓰는 더 지난 줄 자리(처음 화면에는 없다) */}
+                <div class="hl hm-x" hidden></div>
                 {[h0, h2].map((h, i) => (
-                  <div class={`hl hm-${i}`} data-lv-rise={i === 0 ? '' : undefined}>
+                  <div class={`hl hm-${i}`}>
                     <p class="hl-meta"><b lang={people[h.who].lang}>{people[h.who].name}</b><time>{h.time}</time></p>
-                    <p class="hl-src" lang={h.src[0]} data-lv={i === 1 ? '0.75' : undefined}>{h.src[1]}</p>
-                    <p class="hl-tr"><i></i><span lang={h.tr[0]} data-lv={i === 1 ? '1.6' : undefined}>{h.tr[1]}</span></p>
+                    <p class="hl-src" lang={h.src[0]}>{h.src[1]}</p>
+                    <p class="hl-tr"><i></i><span lang={h.tr[0]}>{h.tr[1]}</span></p>
                   </div>
                 ))}
               </div>
@@ -242,8 +244,8 @@ const jsonLd = [
           </div>
         </div>
 
-        {/* 내가 버튼을 누르고 말하면 위쪽(상대 쪽)에 번역이 나오고, 이어서 상대의 말이 아래쪽(내 쪽)에 나온다. */}
-        <div class="mode mode-light" data-lv-dur="6.6">
+        {/* 내가 버튼을 누르고 말하면 위쪽(상대 쪽)에 번역이 나오고, 상대가 말하면 아래쪽(내 쪽)에 나온다. */}
+        <div class="mode mode-light" data-live="phone" data-live-turns={JSON.stringify(t.livePhone)}>
           <div>
             <p class="eyebrow">{t.modeInPerson.eyebrow}</p>
             <h3 class="mode-title">{t.modeInPerson.title1}<br />{t.modeInPerson.title2}</h3>
@@ -251,21 +253,23 @@ const jsonLd = [
           </div>
           {/* 휴대폰 하나: 위쪽 반은 마주 앉은 상대를 향해 뒤집혀 있다 */}
           <div class="phone" aria-hidden="true">
-            <div class="phone-top"><span class="ph-src" lang={t.phoneTop.src[0]} data-lv="0.7">{t.phoneTop.src[1]}</span><span class="ph-tr" lang={t.phoneTop.tr[0]} data-lv="1.3">{t.phoneTop.tr[1]}</span></div>
-            <div class="phone-bottom" data-lv-talk="0.5-1.9"><span class="ph-src" lang={t.phoneBottom.src[0]} data-lv="2.6">{t.phoneBottom.src[1]}</span><span class="ph-tr" lang={t.phoneBottom.tr[0]} data-lv="3.2">{t.phoneBottom.tr[1]}</span><span class="ph-btn">{t.phoneButton}</span></div>
+            <div class="phone-top"><span class="ph-src" lang={t.phoneTop.src[0]}>{t.phoneTop.src[1]}</span><span class="ph-tr" lang={t.phoneTop.tr[0]}>{t.phoneTop.tr[1]}</span></div>
+            <div class="phone-bottom"><span class="ph-src" lang={t.phoneBottom.src[0]}>{t.phoneBottom.src[1]}</span><span class="ph-tr" lang={t.phoneBottom.tr[0]}>{t.phoneBottom.tr[1]}</span><span class="ph-btn">{t.phoneButton}</span></div>
           </div>
         </div>
 
-        <div class="mode mode-light" data-lv-dur="5.6">
+        <div class="mode mode-light" data-live="tablet" data-live-turns={JSON.stringify(t.liveTablet)}>
           <div>
             <p class="eyebrow">{t.modeCaptions.eyebrow}</p>
             <h3 class="mode-title">{t.modeCaptions.title1}<br />{t.modeCaptions.title2}</h3>
             <p class="body-17 mode-body">{t.modeCaptions.body}</p>
           </div>
           <div class="tablet" aria-hidden="true">
-            <p class="tb-0" lang={t.tabletPast[0][0]} data-lv-rise>{t.tabletPast[0][1]}</p>
-            <p class="tb-1" lang={t.tabletPast[1][0]} data-lv-rise>{t.tabletPast[1][1]}</p>
-            <div><p class="tb-src" lang={t.tabletNow.src[0]} data-lv="0.7">{t.tabletNow.src[1]}</p><p class="tb-tr" lang={t.tabletNow.tr[0]} data-lv="1.45">{t.tabletNow.tr[1]}</p></div>
+            <div class="tb-feed">
+              <p class="tb-0" lang={t.tabletPast[0][0]}>{t.tabletPast[0][1]}</p>
+              <p class="tb-1" lang={t.tabletPast[1][0]}>{t.tabletPast[1][1]}</p>
+              <div><p class="tb-src" lang={t.tabletNow.src[0]}>{t.tabletNow.src[1]}</p><p class="tb-tr" lang={t.tabletNow.tr[0]}>{t.tabletNow.tr[1]}</p></div>
+            </div>
           </div>
         </div>
       </div>
@@ -470,18 +474,27 @@ const jsonLd = [
       })
     }
   </script>
-  {/* 세 가지 자리 카드(빌드 후 인라인, 1KB 안팎): 마우스를 올리면(터치 화면은 카드가 화면에 보이면) 시간표대로 lv-* 상태를 바꾼다.
-      글자를 나타내고 테두리를 숨 쉬게 하는 일은 CSS 전환이 맡아서, 매 프레임 도는 스크립트가 없다. */}
+  {/* 세 가지 자리 카드(빌드 후 인라인, 2KB 안팎): 마우스를 올리면(터치 화면은 카드가 화면에 보이면) data-live-turns의 말을
+      한 마디씩 넣는다. 글자가 흘러 들어오고 테두리가 숨 쉬는 움직임은 CSS 전환이, 줄이 위 칸으로 옮겨 가는 움직임은
+      Web Animations가 맡아서 매 프레임 도는 스크립트가 없다. 대화가 끝나면 처음 화면으로 돌아가 다시 이어 간다. */}
   <script>
-    const cards = document.querySelectorAll<HTMLElement>('[data-lv-dur]')
+    type Said = [string, string]
+    type Turn = { who?: 'me' | 'other'; time?: string; name?: { name: string; lang: string }; src: Said; tr: Said }
+    type At = (s: number, f: () => void) => void
+
+    const cards = document.querySelectorAll<HTMLElement>('[data-live]')
     if (cards.length && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      const runs = new Map<HTMLElement, number[]>()
-      // 한글·가나·한자는 글자마다, 띄어 쓰는 글(영어)은 낱말마다 흘러 들어온다.
-      const split = (el: HTMLElement) => {
-        const text = el.textContent ?? ''
-        const cjk = /[぀-ヿ㐀-鿿가-힯]/.test(text)
-        if (!cjk) el.style.setProperty('--lv-step', '70ms')
-        el.replaceChildren(...(cjk ? [...text] : text.split(/(?<=\s)/)).map((part, i) => {
+      const TEXT = '.hist-lines, .ph-src, .ph-tr, .tb-feed'
+      const cjk = (text: string) => /[぀-ヿ㐀-鿿가-힯]/.test(text)
+      // 한글·가나·한자는 글자마다, 띄어 쓰는 글(영어)은 낱말마다 흘러 들어온다. span은 다 나오기까지 걸리는 초.
+      const span = ([, text]: Said) => (cjk(text) ? [...text].length * 0.032 : text.split(/\s+/).length * 0.07) + 0.35
+      const fill = (el: HTMLElement, [lang, text]: Said) => {
+        const c = cjk(text)
+        el.lang = lang
+        el.classList.add('lv-s')
+        el.classList.remove('lv-on')
+        el.style.setProperty('--lv-step', c ? '32ms' : '70ms')
+        el.replaceChildren(...(c ? [...text] : text.split(/(?<=\s)/)).map((part, i) => {
           const s = document.createElement('span')
           s.className = 'lv-c'
           s.style.setProperty('--i', String(i))
@@ -489,41 +502,132 @@ const jsonLd = [
           return s
         }))
       }
+      const on = (el: Element) => el.classList.add('lv-on')
+      // 위 칸으로 옮겨 간 줄: 원래 있던 자리(dy만큼 아래)에서 원래 진하기(o)로 출발해 미끄러져 올라온다.
+      const rise = (el: HTMLElement, dy: number, o: number) =>
+        el.animate([{ transform: `translateY(${dy}px)`, opacity: o, offset: 0 }], { duration: 600, easing: 'cubic-bezier(.2,.8,.2,1)' })
+      const fadeIn = (els: Iterable<Element>) => {
+        for (const el of els) el.animate([{ opacity: 0, offset: 0 }], { duration: 300, easing: 'ease-out' })
+      }
+      const fadeOut = (els: Iterable<Element>) => [...els].map((el) => el.animate([{ opacity: 0 }], { duration: 250, easing: 'ease-out', fill: 'forwards' }))
+
+      // 한 마디를 넣고, 다음 마디까지의 초를 돌려준다.
+      const steps: Record<string, (card: HTMLElement, turn: Turn, at: At) => number> = {
+        // 화상 회의: 줄이 한 칸씩 위로 올라가고, 말하는 사람 테두리가 켜진 채 새 줄이 원문 → 번역 순으로 들어온다.
+        video(card, turn, at) {
+          const vm = card.querySelector<HTMLElement>('.vm')!
+          const old = vm.querySelector<HTMLElement>('.hm-0')!
+          const cur = vm.querySelector<HTMLElement>('.hm-1')!
+          const older = vm.querySelector<HTMLElement>('.hm-x')!
+          const from = [old.offsetTop, cur.offsetTop]
+          older.innerHTML = old.innerHTML
+          older.hidden = false
+          old.innerHTML = cur.innerHTML
+          const who = cur.querySelector<HTMLElement>('.hl-meta b')!
+          who.lang = turn.name!.lang
+          who.textContent = turn.name!.name
+          cur.querySelector('time')!.textContent = turn.time!
+          const src = cur.querySelector<HTMLElement>('.hl-src')!
+          const tr = cur.querySelector<HTMLElement>('.hl-tr span')!
+          fill(src, turn.src)
+          fill(tr, turn.tr)
+          rise(older, from[0] - older.offsetTop, 0.5)
+          rise(old, from[1] - old.offsetTop, 1)
+          fadeIn(cur.querySelectorAll('.hl-meta, .hl-tr i'))
+          vm.querySelectorAll('.avatar').forEach((av, k) => av.classList.toggle('speaking', (k === 0) === (turn.who === 'other')))
+          const a = span(turn.src)
+          at(0.2, () => vm.classList.add('lv-talk'))
+          at(0.35, () => on(src))
+          at(0.35 + a, () => on(tr))
+          at(0.45 + a, () => vm.classList.remove('lv-talk'))
+          return 0.35 + a + span(turn.tr) + 1.5
+        },
+        // 대면 대화: 말하는 사람 쪽 반의 가장자리가 켜지고, 듣는 사람 쪽 반에 원문 → 번역이 들어온다.
+        phone(card, turn, at) {
+          const me = turn.who === 'me'
+          const half = card.querySelector<HTMLElement>(me ? '.phone-top' : '.phone-bottom')!
+          const talker = card.querySelector<HTMLElement>(me ? '.phone-bottom' : '.phone-top')!
+          const src = half.querySelector<HTMLElement>('.ph-src')!
+          const tr = half.querySelector<HTMLElement>('.ph-tr')!
+          const out = fadeOut([src, tr])
+          const a = span(turn.src)
+          at(0.1, () => talker.classList.add('lv-talk'))
+          at(0.3, () => {
+            out.forEach((x) => x.cancel())
+            fill(src, turn.src)
+            fill(tr, turn.tr)
+          })
+          at(0.4, () => on(src))
+          at(0.4 + a, () => on(tr))
+          at(0.5 + a, () => talker.classList.remove('lv-talk'))
+          return 0.4 + a + span(turn.tr) + 1.3
+        },
+        // 자막 화면: 자막이 한 칸씩 올라가고(지난 자막은 번역만 남는다), 새 자막이 원문 → 번역 순으로 들어온다.
+        tablet(card, turn, at) {
+          const tb = card.querySelector<HTMLElement>('.tablet')!
+          const p0 = tb.querySelector<HTMLElement>('.tb-0')!
+          const p1 = tb.querySelector<HTMLElement>('.tb-1')!
+          const src = tb.querySelector<HTMLElement>('.tb-src')!
+          const tr = tb.querySelector<HTMLElement>('.tb-tr')!
+          const from = [p1.offsetTop, tr.offsetTop]
+          p0.lang = p1.lang
+          p0.textContent = p1.textContent
+          p1.lang = tr.lang
+          p1.textContent = tr.textContent
+          fill(src, turn.src)
+          fill(tr, turn.tr)
+          rise(p0, from[0] - p0.offsetTop, 0.6)
+          rise(p1, from[1] - p1.offsetTop, 1)
+          const feed = tb.querySelector<HTMLElement>('.tb-feed')!
+          feed.classList.toggle('lv-over', feed.scrollHeight > feed.clientHeight + 1)
+          const a = span(turn.src)
+          at(0.3, () => on(src))
+          at(0.3 + a, () => on(tr))
+          return 0.3 + a + span(turn.tr) + 1.7
+        },
+      }
+
+      const runs = new Map<HTMLElement, () => void>()
       const start = (card: HTMLElement) => {
-        if (runs.has(card)) return
-        const lines = [...card.querySelectorAll<HTMLElement>('[data-lv]')]
-        const talks = [...card.querySelectorAll<HTMLElement>('[data-lv-talk]')]
-        // 처음에는 지금 화면 그대로 보이다가, 곧 지금 줄이 빠지고 다음 말이 흘러 들어온다.
-        lines.forEach((l) => {
-          if (!l.querySelector('.lv-c')) split(l)
-          l.classList.add('lv-on')
-        })
-        card.classList.add('lv-run')
+        const step = steps[card.dataset.live ?? '']
+        if (runs.has(card) || !step) return
+        const turns: Turn[] = JSON.parse(card.dataset.liveTurns ?? '[]')
+        const screen = card.querySelector<HTMLElement>('.vm, .phone, .tablet')!
+        const first = screen.innerHTML
         const timers: number[] = []
-        runs.set(card, timers)
-        const at = (s: number, f: () => void) => timers.push(window.setTimeout(f, s * 1000))
-        const loop = () => {
-          timers.length = 0
-          at(0.25, () => card.classList.replace('lv-new', 'lv-clear') || card.classList.add('lv-clear'))
-          at(0.55, () => {
-            lines.forEach((l) => l.classList.remove('lv-on'))
-            card.classList.replace('lv-clear', 'lv-new')
-          })
-          lines.forEach((l) => at(Number(l.dataset.lv), () => l.classList.add('lv-on')))
-          talks.forEach((el) => {
-            const [a, b] = (el.dataset.lvTalk ?? '').split('-').map(Number)
-            at(a, () => el.classList.add('lv-talk'))
-            at(b, () => el.classList.remove('lv-talk'))
-          })
-          at(Number(card.dataset.lvDur), loop)
+        const at: At = (s, f) => void timers.push(window.setTimeout(f, s * 1000))
+        let i = 0
+        let dirty = false
+        // 처음 화면으로 되돌린다(바뀐 글은 버리고 원래 글을 흐리게 다시 보인다).
+        const reset = () => {
+          screen.getAnimations({ subtree: true }).forEach((x) => x.cancel())
+          screen.innerHTML = first
+          screen.classList.remove('lv-talk')
+          fadeIn(screen.querySelectorAll(TEXT))
+          dirty = false
         }
-        loop()
+        const next = () => {
+          if (i < turns.length) {
+            dirty = true
+            return at(step(card, turns[i++], at), next)
+          }
+          // 대화가 끝나면 글을 지우고 처음 화면에서 다시 이어 간다.
+          i = 0
+          fadeOut(screen.querySelectorAll(TEXT))
+          at(0.3, reset)
+          at(1.3, next)
+        }
+        card.classList.add('lv-run')
+        at(0.3, next)
+        runs.set(card, () => {
+          timers.forEach(clearTimeout)
+          card.classList.remove('lv-run')
+          if (dirty) reset()
+        })
       }
       const stop = (card: HTMLElement) => {
-        runs.get(card)?.forEach(clearTimeout)
+        runs.get(card)?.()
         runs.delete(card)
-        card.classList.remove('lv-run', 'lv-clear', 'lv-new')
-        card.querySelectorAll('.lv-on, .lv-talk').forEach((el) => el.classList.remove('lv-on', 'lv-talk'))
       }
       if (matchMedia('(hover: hover)').matches) {
         cards.forEach((c) => {

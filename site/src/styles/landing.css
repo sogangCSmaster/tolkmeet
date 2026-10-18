@@ -179,10 +179,13 @@ a:hover { text-decoration: underline; }
 .hist-mini { flex: 0 0 200px; border-radius: 12px; padding: 12px 14px 14px; box-sizing: border-box; }
 .hist-mini .hist-head b { font-size: 12px; }
 .hist-mini .hist-lines { gap: 10px; }
+/* 대화가 이어지면 줄이 아래에서부터 쌓이고, 넘친 지난 줄은 위쪽에서 흐려지며 잘린다(판 높이는 그대로) */
+.hist-mini .hist-lines { margin-top: 0; flex: 1 1 auto; min-height: 0; overflow: hidden; justify-content: flex-end; -webkit-mask-image: linear-gradient(to bottom, transparent, #000 22px); mask-image: linear-gradient(to bottom, transparent, #000 22px); }
 .hist-mini .hl-meta, .hist-mini .hl-src { font-size: 10px; }
 .hm-0 { opacity: 0.5; }
-.hm-0 .hl-tr { font-size: 12px; }
-.hm-0 .hl-tr i { width: 7px; margin-top: 7px; }
+.hm-x { opacity: 0.25; }
+:is(.hm-0, .hm-x) .hl-tr { font-size: 12px; }
+:is(.hm-0, .hm-x) .hl-tr i { width: 7px; margin-top: 7px; }
 .hm-1 .hl-tr { font-size: 15px; font-weight: 700; }
 .hm-1 .hl-tr i { width: 8px; margin-top: 9px; }
 .mode-light { flex: 1 1 340px; background: #F5F5F7; padding: 44px 44px 0; display: flex; flex-direction: column; gap: 32px; overflow: hidden; }
@@ -198,22 +201,21 @@ a:hover { text-decoration: underline; }
 .ph-tr { font-size: 18px; font-weight: 700; }
 .ph-btn { margin-top: auto; align-self: center; padding: 8px 14px; border-radius: 16px; background: #D4401C; color: #FFFFFF; font-size: 12px; font-weight: 700; }
 /* 자막 화면: 탁자 위 태블릿 */
-.tablet { align-self: stretch; height: 300px; margin-bottom: -40px; border-radius: 26px; background: #FFFFFF; border: 9px solid #1D1D1F; padding: 26px; box-sizing: border-box; display: flex; flex-direction: column; justify-content: flex-start; gap: 14px; box-shadow: 0 30px 60px -24px rgba(0,0,0,0.3); }
+.tablet { align-self: stretch; height: 300px; margin-bottom: -40px; border-radius: 26px; background: #FFFFFF; border: 9px solid #1D1D1F; padding: 26px; box-sizing: border-box; display: flex; flex-direction: column; box-shadow: 0 30px 60px -24px rgba(0,0,0,0.3); }
+/* 자막 묶음: 보이는 높이(태블릿 아래쪽은 카드 밖으로 잘린다) 안에서는 위에서부터 놓이고, 넘치면 새 자막이 아래에 남고
+   지난 자막이 위쪽에서 흐려지며 빠진다 */
+.tb-feed { display: flex; flex-direction: column; justify-content: flex-end; gap: 14px; max-height: 200px; overflow: hidden; }
+.tb-feed.lv-over { -webkit-mask-image: linear-gradient(to bottom, transparent, #000 28px); mask-image: linear-gradient(to bottom, transparent, #000 28px); }
 .tablet p { margin: 0; }
 .tb-0 { font-size: 13px; font-weight: 600; opacity: 0.35; }
 .tb-1 { font-size: 17px; font-weight: 600; opacity: 0.6; }
 .tb-src { font-size: 12px; color: #6E6E73; }
 .tablet .tb-tr { margin-top: 3px; font-size: 26px; line-height: 1.2; font-weight: 700; letter-spacing: -0.01em; }
 
-/* 세 가지 자리가 실제로 돌아가는 모습. Landing.astro의 작은 스크립트가 시간표대로 lv-* 상태만 바꾸고, 움직임은 모두 CSS 전환이다.
-   lv-run 중에 lv-on이 아닌 줄은 글자가 숨고, lv-on이 붙으면 글자(--i번째)가 차례로 흐림을 벗으며 나타난다. */
-.lv-c { transition: opacity .3s, filter .3s; }
-.lv-run [data-lv] { transition: opacity .25s; }
-.lv-run [data-lv]:not(.lv-on) .lv-c { opacity: 0; filter: blur(4px); transition: none; }
-.lv-run .lv-on .lv-c { transition: opacity .35s cubic-bezier(.2,.8,.2,1), filter .35s cubic-bezier(.2,.8,.2,1); transition-delay: calc(var(--i) * var(--lv-step, 32ms)); }
-.lv-clear [data-lv] { opacity: 0; }
-.lv-new [data-lv-rise] { animation: lv-rise .7s cubic-bezier(.2,.8,.2,1) both; }
-@keyframes lv-rise { from { transform: translateY(10px); opacity: .3; } }
+/* 세 가지 자리가 실제로 돌아가는 모습. Landing.astro의 작은 스크립트가 data-live-turns의 말을 한 마디씩 넣고 lv-* 상태만 붙인다.
+   새 줄(lv-s)은 글자가 숨어 있다가, lv-on이 붙으면 --i번째 글자부터 차례로 흐림을 벗으며 나타난다. */
+.lv-s .lv-c { transition: opacity .35s cubic-bezier(.2,.8,.2,1), filter .35s cubic-bezier(.2,.8,.2,1); transition-delay: calc(var(--i) * var(--lv-step)); }
+.lv-s:not(.lv-on) .lv-c { opacity: 0; filter: blur(4px); transition: none; }
 /* 말하는 동안: 테두리가 숨 쉬듯 커졌다 작아지고, 소리 막대가 오르내린다. 말하지 않을 때는 테두리가 없다. */
 .lv-run .vm .speaking { transition: box-shadow .4s; }
 .lv-run .vm:not(.lv-talk) .speaking { box-shadow: 0 0 0 0 rgba(242,84,45,0), 0 0 0 0 rgba(242,84,45,0); }
@@ -223,10 +225,10 @@ a:hover { text-decoration: underline; }
 .lv-talk .bars i:nth-child(2) { animation-duration: .3s; animation-delay: -.15s; }
 .lv-talk .bars i:nth-child(3) { animation-duration: .36s; animation-delay: -.08s; }
 @keyframes lv-eq { from { transform: scaleY(.35); } to { transform: scaleY(1.25); } }
-/* 대면 대화: 버튼을 누르고 말하는 동안 내 쪽 화면 가장자리가 주황빛을 띠고(버튼은 카드 아래로 잘려 잘 안 보인다),
-   버튼은 눌린 채로 고리가 퍼진다 */
-.phone-bottom { transition: box-shadow .4s; }
-.phone-bottom.lv-talk { box-shadow: inset 0 0 0 2px rgba(242,84,45,0.75), inset 0 0 26px rgba(242,84,45,0.18); }
+/* 대면 대화: 말하는 사람 쪽 반의 가장자리가 주황빛을 띤다(아래 버튼은 카드 밖으로 잘려 잘 안 보인다). 내가 말할 때는
+   버튼이 눌린 채로 고리가 퍼진다. */
+.phone-top, .phone-bottom { transition: box-shadow .4s; }
+.phone-top.lv-talk, .phone-bottom.lv-talk { box-shadow: inset 0 0 0 2px rgba(242,84,45,0.75), inset 0 0 26px rgba(242,84,45,0.18); }
 .ph-btn { transition: transform .35s cubic-bezier(.34,1.45,.5,1); }
 .lv-talk .ph-btn { transform: scale(.93); animation: lv-rec 1s ease-out infinite; }
 @keyframes lv-rec { from { box-shadow: 0 0 0 0 rgba(212,64,28,.45); } to { box-shadow: 0 0 0 10px rgba(212,64,28,0); } }
@@ -546,7 +548,7 @@ a:hover { text-decoration: underline; }
   .mode-video { padding: 28px; gap: 28px; border-radius: 24px; }
   .vm { flex-basis: 100%; height: auto; flex-wrap: wrap; }
   .vm-tile { flex: 1 1 0; height: 150px; }
-  .hist-mini { flex: 1 1 100%; min-height: 150px; }
+  .hist-mini { flex: 1 1 100%; height: 230px; }
   .mode-light { padding: 28px 28px 0; border-radius: 24px; }
   .dt-front { padding: 24px; }
   .mo-in { padding: 22px 20px 16px; }
