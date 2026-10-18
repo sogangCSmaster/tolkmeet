@@ -131,7 +131,10 @@ pub fn language_name(tag: &str) -> &str {
         ("en", _) => "English",
         ("es", _) => "Spanish",
         ("fr", _) => "French",
+        // 스위스에서는 말은 방언으로 해도 글은 스위스 표준 독일어(ß 대신 ss)로 쓴다.
+        (_, "de-CH") => "Swiss German (write in Swiss Standard German)",
         ("de", _) => "German",
+        ("it", _) => "Italian",
         ("vi", _) => "Vietnamese",
         ("th", _) => "Thai",
         _ => tag,
@@ -358,6 +361,9 @@ mod tests {
         assert_eq!(language_name("zh-CN"), "Simplified Chinese");
         assert_eq!(language_name("zh-TW"), "Traditional Chinese");
         assert_eq!(language_name("th"), "Thai");
+        assert_eq!(language_name("de"), "German");
+        assert_eq!(language_name("de-CH"), "Swiss German (write in Swiss Standard German)");
+        assert_eq!(language_name("it"), "Italian");
         // 모르는 태그는 그대로 넘긴다.
         assert_eq!(language_name("sw"), "sw");
     }

@@ -35,7 +35,7 @@ const aim = ([x, y]: Size, dx = 8, dy = 6): Size => [x + dx, y + dy]
 const wave = (t: number, i: number) => Math.abs(Math.sin(t * (7 + (i % 5) * 1.9) + i * 1.3) * (0.6 + 0.4 * Math.sin(t * 3.1 + i)))
 
 const scenes: Record<string, (k: Kit) => Scene> = {
-  // 9개 언어: 알약 → 언어 칩 → 日本語 고르기 → 알림 → 알약
+  // 11개 언어: 알약 → 언어 칩 → 日本語 고르기 → 알림 → 알약
   lang(k) {
     const pill = k.q('pill'), chips = k.q('chips'), toast = k.q('toast'), cap = k.q('cap'), on = k.q('on')
     const pick = on.parentElement as HTMLElement

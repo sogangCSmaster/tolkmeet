@@ -11,7 +11,7 @@ const m = t.motion
 const fill = (s: string, v: Record<string, string>) => s.replace(/\{(\w+)\}/g, (_, k: string) => v[k] ?? '')
 const initial = (name: string) => [...name][0]
 // 앱의 언어 목록(web/src/lib/languages.ts)과 같은 순서·이름(각 언어로 쓴 이름)
-const LANGS: [string, string][] = [['ko', '한국어'], ['ja', '日本語'], ['en', 'English'], ['zh-Hans', '中文(简体)'], ['es', 'Español'], ['fr', 'Français'], ['de', 'Deutsch'], ['vi', 'Tiếng Việt'], ['th', 'ไทย']]
+const LANGS: [string, string][] = [['ko', '한국어'], ['ja', '日本語'], ['en', 'English'], ['zh-Hans', '中文(简体)'], ['es', 'Español'], ['fr', 'Français'], ['de', 'Deutsch'], ['de-CH', 'Schweizerdeutsch'], ['it', 'Italiano'], ['vi', 'Tiếng Việt'], ['th', 'ไทย']]
 const endonym = (code: string) => LANGS.find(([c]) => c === code)?.[1] ?? code
 const other = { name: t.otherName, lang: t.otherLang }
 const theirs = t.privacyLines.filter((l) => l.who === 'other').map((l) => l.tr)
