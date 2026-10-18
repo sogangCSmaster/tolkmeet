@@ -138,7 +138,7 @@ The app runs on one AWS Lightsail server (Seoul, Ubuntu 24.04, `meet.tolkmeet.co
 | Script | What it does |
 |---|---|
 | `deploy/provision.sh` | Sets up the server: Caddy (HTTPS, HTTP/3), coturn, Litestream, systemd units, health checks, swap, watchdog, automatic security updates. Safe to run again. |
-| `deploy/secrets.sh` | Sends secrets from 1Password straight to `/etc/tolkmeet/secrets.env` (`op inject`; values are never printed). |
+| `deploy/secrets.sh` | Sends secrets from 1Password straight to `/etc/tolkmeet/secrets.env` (`op inject`; values are never printed). Paddle live values are left out unless you run it as `PADDLE=1 deploy/secrets.sh`, which turns billing on. |
 | `deploy/deploy.sh` | Cross-builds the server (`cargo zigbuild`, x86_64 Linux) and the web app, uploads them as a new release and restarts. If `/api/health` does not answer within 30 s it switches back to the previous release. `deploy/deploy.sh rollback` goes back one release. |
 | `deploy/restore-from-snapshot.sh` | When the whole server is lost: new instance from the latest daily snapshot, firewall from `deploy/firewall.json`, static IP moved, database restored from the S3 backup. |
 
