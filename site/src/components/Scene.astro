@@ -1,0 +1,155 @@
+---
+// "회의에서 중요한 것들" 카드 뒷면의 장면(384×240 좌표). 처음에는 핵심 상태 하나만 멈춘 그림으로 보이고(.mo-static),
+// 카드를 누르면 src/motion/이 이 마크업을 복제해 대화 상자에서 움직인다(.mo-live). 문구는 모두 사전에서 온다.
+//   data-l: 가운데에서 모양이 바뀌는 판 위에 차례로 올라오는 층 · data-a: 장면이 따로 움직이는 부분
+//   .k: 멈춘 그림에 보이는 층 · .ns: 멈춘 그림에서는 숨기는 부분
+import type { Dict } from '../i18n/en'
+
+interface Props { t: Dict; scene: string }
+const { t, scene } = Astro.props
+const m = t.motion
+const fill = (s: string, v: Record<string, string>) => s.replace(/\{(\w+)\}/g, (_, k: string) => v[k] ?? '')
+const initial = (name: string) => [...name][0]
+// 앱의 언어 목록(web/src/lib/languages.ts)과 같은 순서·이름(각 언어로 쓴 이름)
+const LANGS: [string, string][] = [['ko', '한국어'], ['ja', '日本語'], ['en', 'English'], ['zh-Hans', '中文(简体)'], ['es', 'Español'], ['fr', 'Français'], ['de', 'Deutsch'], ['vi', 'Tiếng Việt'], ['th', 'ไทย']]
+const endonym = (code: string) => LANGS.find(([c]) => c === code)?.[1] ?? code
+const other = { name: t.otherName, lang: t.otherLang }
+const theirs = t.privacyLines.filter((l) => l.who === 'other').map((l) => l.tr)
+// 앱이 저장하는 파일 이름 형식(web/src/lib/transcript.ts): tolkmeet-회의코드-날짜-시각.txt
+const FILE = 'tolkmeet-hq4w-x7mz-k2pd-20261018-1503.txt'
+const wave = Array.from({ length: 14 }, (_, i) => i)
+const chart = [38, 56, 44, 70, 88]
+---
+<div class="mo-stage mo-static" data-scene={scene}>
+  {scene === 'lang' && <>
+    <div class="mo-l mo-pill" data-l="pill">
+      <svg class="mo-ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z" /></svg>
+      <span>{m.langPill}</span>
+      <svg class="mo-ic mo-ic-s" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5" /></svg>
+    </div>
+    <div class="mo-l mo-card mo-langs k" data-l="chips">
+      <p class="mo-cap" data-a="cap">{m.langPill}</p>
+      <div class="mo-chiprow">
+        {LANGS.map(([code, name]) => (
+          <span class="mo-chip" data-a="chip" lang={code}>{name}{name === m.langPick && <i class="mo-on" data-a="on">{name}</i>}</span>
+        ))}
+      </div>
+    </div>
+    <div class="mo-l mo-pill mo-dark" data-l="toast">
+      <svg class="mo-ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M8 12.5l2.7 2.7L16 9.8" /></svg>
+      <span>{m.langToast}</span>
+    </div>
+  </>}
+
+  {scene === 'join' && <>
+    <div class="mo-l mo-pill" data-l="pill">
+      <svg class="mo-ic" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></svg>
+      <span>{m.joinCopy}</span>
+    </div>
+    <div class="mo-l mo-pill mo-dark" data-l="copied">
+      <svg class="mo-ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M8 12.5l2.7 2.7L16 9.8" /></svg>
+      <span>{m.joinCopied}</span>
+    </div>
+    <div class="mo-l mo-card mo-knock k" data-l="knock">
+      <div class="mo-row">
+        <span class="mo-av" data-a="av" lang={other.lang}>{initial(other.name)}</span>
+        <div data-a="kt">
+          <p class="mo-b">{fill(m.joinKnock, { name: other.name })}</p>
+          <p class="mo-sub">{fill(m.joinSpeaks, { lang: endonym(other.lang) })}</p>
+        </div>
+      </div>
+      <div class="mo-btns" data-a="kb"><span class="mo-btn">{m.joinDeny}</span><span class="mo-btn mo-btn-cta" data-a="admit">{m.joinAdmit}</span></div>
+    </div>
+    <div class="mo-l mo-pill mo-dark" data-l="joined">
+      <span class="mo-av mo-av-xs" lang={other.lang}>{initial(other.name)}</span>
+      <span>{fill(m.joinJoined, { name: other.name })}</span>
+    </div>
+  </>}
+
+  {scene === 'accent' && <>
+    <div class="mo-l mo-pill" data-l="mic">
+      <svg class="mo-ic mo-ic-hot" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M6 11a6 6 0 0 0 12 0M12 17v4" /></svg>
+      <span class="mo-wave">{wave.map(() => <i data-a="bar"></i>)}</span>
+      <span class="mo-sub">{m.accentTag}</span>
+    </div>
+    <div class="mo-l mo-card mo-capcard k" data-l="card">
+      <div class="mo-row mo-head">
+        <span class="mo-av mo-av-s mo-speaking">{initial(m.accentWho)}</span>
+        <b>{m.accentWho}</b>
+        <span class="mo-bars"><i data-a="hb"></i><i data-a="hb"></i><i data-a="hb"></i></span>
+        <span class="mo-tag">{m.accentTag}</span>
+      </div>
+      <div class="mo-stack">
+        <p class="mo-src mo-type mo-faint ns" data-a="interim" lang={m.accentInterim[0]}><span>{m.accentInterim[1]}</span><i class="mo-cover"></i></p>
+        <p class="mo-src" data-a="final" lang={m.accentSrc[0]}>{m.accentSrc[1]}</p>
+      </div>
+      <p class="mo-tr" data-a="tr"><i class="mo-dash"></i><span lang={m.accentTr[0]}>{m.accentTr[1]}</span></p>
+    </div>
+  </>}
+
+  {scene === 'txt' && <>
+    <div class="mo-l mo-card mo-list" data-l="list">
+      <p class="mo-cap" data-a="line">{t.historyTitle}</p>
+      {t.history.map((h) => (
+        <div class="mo-li" data-a="line">
+          <p class="mo-src-s" lang={h.src[0]}>{h.src[1]}</p>
+          <p class="mo-tr mo-tr-s" lang={h.tr[0]}><i class="mo-dash"></i><span>{h.tr[1]}</span></p>
+        </div>
+      ))}
+      <span class="mo-btn mo-btn-ink" data-a="save">
+        <svg class="mo-ic mo-ic-s" viewBox="0 0 24 24"><path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19h14" /></svg>{m.txtSave}
+      </span>
+    </div>
+    <div class="mo-l mo-card mo-file k" data-l="file">
+      <span class="mo-doc" data-a="doc"><svg viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7z" /><path d="M14 3v5h5" /></svg><b>TXT</b></span>
+      <div>
+        <p class="mo-b mo-fname">{FILE}</p>
+        <p class="mo-sub">{m.txtSub}</p>
+      </div>
+    </div>
+    <div class="mo-l mo-pill mo-dark" data-l="saved">
+      <svg class="mo-ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M8 12.5l2.7 2.7L16 9.8" /></svg>
+      <span>{m.txtSaved}</span>
+    </div>
+  </>}
+
+  {scene === 'share' && <>
+    <div class="mo-l mo-pill" data-l="pill">
+      <svg class="mo-ic" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2" /><path d="M8 21h8M12 14V8M9 10.5l3-3 3 3" /></svg>
+      <span>{m.sharePill}</span>
+    </div>
+    <div class="mo-l mo-card mo-slide k" data-l="slide">
+      <span class="mo-on-air" data-a="sh"><i></i>{m.shareOn}</span>
+      <i class="mo-sh mo-sh-1" data-a="sh"></i>
+      <i class="mo-sh mo-sh-2" data-a="sh"></i>
+      <span class="mo-chart" data-a="sh">{chart.map((h) => <i style={`height:${h}%`}></i>)}</span>
+    </div>
+    <div class="mo-l mo-sat mo-win k" data-l="win">
+      <p class="mo-win-h"><span class="mo-bars"><i></i><i></i><i></i></span>{m.shareWin}</p>
+      <div class="mo-stack">
+        {theirs.slice(0, 2).map((tr, i) => (
+          <p class:list={['mo-tr mo-tr-s', i > 0 && 'ns']} data-a="wl"><i class="mo-dash"></i><span lang={tr[0]}>{tr[1]}</span></p>
+        ))}
+      </div>
+    </div>
+  </>}
+
+  {scene === 'oss' && <>
+    <div class="mo-l mo-pill" data-l="pill">
+      <svg class="mo-ic" viewBox="0 0 24 24"><path d="M8.5 7 3.5 12l5 5M15.5 7l5 5-5 5" /></svg>
+      <span>{m.ossPill}</span>
+    </div>
+    <div class="mo-l mo-card mo-dark mo-code k" data-l="code">
+      <p class="mo-path">tolkmeet / server</p>
+      <p class="mo-type" data-a="ln"><span><b>pub async fn</b> translate(</span><i class="mo-cover"></i></p>
+      <p class="mo-type" data-a="ln"><span>    speech: <u>AudioStream</u>,</span><i class="mo-cover"></i></p>
+      <p class="mo-type" data-a="ln"><span>    to: <u>Lang</u>,</span><i class="mo-cover"></i></p>
+      <p class="mo-type" data-a="ln"><span>) -&gt; <u>Captions</u> {'{'}</span><i class="mo-cover"></i></p>
+      <span class="mo-badge" data-a="badge">AGPL-3.0</span>
+    </div>
+    <div class="mo-l mo-pill mo-dark" data-l="gh">
+      <svg class="mo-ic mo-ic-fill" viewBox="0 0 24 24"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56v-2c-3.2.7-3.87-1.37-3.87-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.03 1.76 2.69 1.25 3.35.96.1-.75.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.28 1.18-3.09-.12-.29-.51-1.46.11-3.04 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.58.23 2.75.11 3.04.74.81 1.18 1.83 1.18 3.09 0 4.42-2.69 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.68.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z" /></svg>
+      <span>{t.footerGithub}</span>
+    </div>
+  </>}
+</div>

@@ -1,7 +1,7 @@
 /*
  * 소개 페이지(design/v2/source/MainFull.dc.html). 값은 디자인 그대로이고, 밝은 화면만 쓴다(<html data-theme="light">).
  * 디자인은 content-box 기준이라 전역 box-sizing을 바꾸지 않는다(디자인이 border-box인 카드에만 따로 준다).
- * 움직임은 개인정보 구역의 CSS 애니메이션뿐이다. 움직임 줄이기 설정이면 멈춘 그림으로 보인다.
+ * 움직임은 개인정보 구역의 CSS 애니메이션, 기능 카드 뒤집기, 기능 장면(src/motion/)이다. 움직임 줄이기 설정이면 멈춘 그림으로 보인다.
  */
 @import '../../../design/tokens.css';
 
@@ -205,11 +205,155 @@ a:hover { text-decoration: underline; }
 .tb-src { font-size: 12px; color: #6E6E73; }
 .tablet .tb-tr { margin-top: 3px; font-size: 26px; line-height: 1.2; font-weight: 700; letter-spacing: -0.01em; }
 
-/* ── 회의에서 중요한 것들 ── */
+/* ── 회의에서 중요한 것들: 마우스를 올리거나 키보드로 오면 카드가 뒤집혀 장면의 핵심 상태가 보이고, 누르면 장면이 열린다 ── */
 .details { margin: 40px 0 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 16px; }
-.details li { flex: 1 1 300px; box-sizing: border-box; border-radius: 22px; background: #F5F5F7; padding: 28px; }
+.details li { flex: 1 1 300px; position: relative; perspective: 1400px; }
+.details li.mo-away { opacity: 0; }
 .details h3 { margin: 0; font-size: 44px; font-weight: 700; letter-spacing: -0.02em; }
 .details .body-17 { margin-top: 10px; }
+/* 카드 전체를 덮는 단추(이름은 제목, 설명은 본문). 뒤집혀도 단추는 그대로라 마우스가 떨리지 않는다. */
+.dt-btn { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; margin: 0; padding: 0; border: 0; border-radius: 22px; background: none; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+/* 뒤집기: 살짝 넘쳤다 돌아오는 용수철(w 13, 감쇠 0.7). linear()를 모르는 브라우저는 앞의 곡선을 쓴다. */
+.dt-flip { position: relative; height: 100%; transform-style: preserve-3d; transition: transform .75s cubic-bezier(.3, 1.3, .5, 1); transition-timing-function: linear(0, 0.079, 0.255, 0.456, 0.643, 0.795, 0.906, 0.979, 1.022, 1.041, 1.046, 1.042, 1.034, 1.024, 1.016, 1.009, 1.004, 1.001, 0.999, 0.998, 0.998, 0.998, 1); }
+.dt-face { box-sizing: border-box; border-radius: 22px; background: #F5F5F7; -webkit-backface-visibility: hidden; backface-visibility: hidden; }
+.dt-front { height: 100%; padding: 28px; }
+.dt-back { position: absolute; inset: 0; transform: rotateY(180deg); display: flex; flex-direction: column; overflow: hidden; }
+@media (hover: hover) { .details li:hover .dt-flip { transform: rotateY(180deg); } }
+.details li:has(.dt-btn:focus-visible) .dt-flip, .details li.is-flip .dt-flip { transform: rotateY(180deg); }
+.dt-prev { position: relative; flex: 1; min-height: 0; }
+.dt-prev .mo-stage { position: absolute; left: 50%; top: 50%; margin: -120px 0 0 -192px; transform: scale(.7); }
+/* 화면 공유는 자막 창이 발표 화면 아래로 삐져나와 조금 작게, 위로 올려 보인다 */
+.dt-prev .mo-stage[data-scene="share"] { transform: translate(-8px, -10px) scale(.62); }
+.dt-hint { margin: 0; padding: 0 20px 18px; display: flex; align-items: center; justify-content: center; gap: 7px; font-size: 15px; font-weight: 600; color: #C2381A; }
+.dt-hint svg { flex: none; }
+.dt-hint-touch { display: none; }
+@media (hover: none) { .dt-hint-ptr { display: none; } .dt-hint-touch { display: inline; } }
+
+/* 장면 무대(384×240). 처음엔 핵심 상태(.k)만 흰 판 위에 멈춰 있고(.mo-static), 대화 상자에서는 src/motion/이 움직인다(.mo-live). */
+.mo-stage { position: relative; width: 384px; height: 240px; font-size: 13px; line-height: 1.35; color: #1D1D1F; text-align: left; -webkit-user-select: none; user-select: none; }
+.mo-stage p { margin: 0; }
+.mo-l { position: absolute; inset: 0; margin: auto; width: max-content; height: max-content; box-sizing: border-box; }
+.mo-static .mo-l:not(.k), .mo-static .ns, .mo-static .mo-cover { display: none; }
+.mo-static .k:not(.mo-sat) { background: #FFFFFF; border-radius: 22px; box-shadow: 0 0 0 .5px rgba(0,0,0,0.08), 0 10px 26px -6px rgba(0,0,0,0.14); }
+.mo-static .k.mo-dark { background: #1D1D1F; }
+.mo-dark { color: #F5F5F7; }
+.mo-ic { flex: none; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.mo-ic-s { width: 14px; height: 14px; }
+.mo-ic-fill { fill: currentColor; stroke: none; }
+.mo-ic-hot { color: #F2542D; }
+.mo-pill { display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 18px 0 15px; font-size: 14px; font-weight: 600; white-space: nowrap; }
+.mo-card { padding: 14px 16px 16px; }
+.mo-cap { font-size: 11px; font-weight: 600; color: #6E6E73; }
+.mo-row { display: flex; align-items: center; gap: 12px; }
+.mo-b { font-size: 14px; font-weight: 600; white-space: nowrap; }
+.mo-sub { font-size: 12px; color: #6E6E73; white-space: nowrap; }
+.mo-av { flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; background: linear-gradient(180deg, #A2A6B0 0%, #7D818C 100%); color: #FFFFFF; font-size: 17px; font-weight: 600; }
+.mo-av-s { width: 28px; height: 28px; font-size: 12px; }
+.mo-av-xs { width: 24px; height: 24px; margin-left: -4px; font-size: 11px; }
+.mo-speaking { box-shadow: 0 0 0 2px #F2542D, 0 0 0 5px rgba(242,84,45,0.18); }
+.mo-btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 16px; border-radius: 16px; background: #F5F5F7; font-size: 13px; font-weight: 600; white-space: nowrap; }
+.mo-btn-cta { background: #D4401C; color: #FFFFFF; }
+.mo-btn-ink { background: #1D1D1F; color: #FFFFFF; }
+/* 원문(작게)과 번역(주황 표시 + 굵게): 페이지의 자막과 같은 모양 */
+.mo-stack { display: grid; }
+.mo-stack > * { grid-area: 1 / 1; }
+.mo-src { font-size: 15px; white-space: nowrap; }
+.mo-faint { color: #A1A1A6; }
+.mo-tr { margin-top: 6px !important; display: flex; gap: 8px; font-size: 16px; font-weight: 700; line-height: 1.3; letter-spacing: -0.01em; }
+.mo-dash { flex: none; width: 10px; height: 3px; margin-top: calc(.65em - 1px); border-radius: 2px; background: #F2542D; }
+.mo-tr-s { margin-top: 2px !important; font-size: 13px; font-weight: 600; }
+.mo-tr-s .mo-dash { width: 8px; }
+.mo-bars { display: inline-flex; align-items: center; gap: 2px; height: 12px; }
+.mo-bars i { width: 2px; height: 11px; border-radius: 1px; background: #F2542D; transform: scaleY(.6); }
+.mo-bars i:nth-child(2) { transform: none; }
+/* 글자를 왼쪽부터 드러내는 덮개(옮기기만 한다) */
+.mo-type { position: relative; justify-self: start; width: max-content; max-width: 100%; overflow: hidden; white-space: pre; }
+.mo-cover { position: absolute; top: 0; bottom: 0; left: -24px; width: calc(100% + 48px); background: linear-gradient(90deg, transparent, var(--bg, #FFFFFF) 24px); }
+/* 9개 언어 */
+.mo-langs { width: 340px; }
+.mo-chiprow { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
+.mo-chip { position: relative; display: inline-flex; align-items: center; height: 30px; padding: 0 12px; border-radius: 15px; background: #F5F5F7; font-size: 13px; font-weight: 500; white-space: nowrap; }
+.mo-on { position: absolute; inset: 0; display: grid; place-items: center; border-radius: 15px; background: #1D1D1F; color: #FFFFFF; font-style: normal; }
+/* 가입 없이 */
+.mo-knock { min-width: 272px; padding: 16px; }
+.mo-btns { margin-top: 14px; display: flex; justify-content: flex-end; gap: 8px; }
+/* 발음 그대로 */
+.mo-wave { display: flex; align-items: center; gap: 2.5px; height: 22px; }
+.mo-wave i { width: 3px; height: 22px; border-radius: 2px; background: #F2542D; transform: scaleY(.2); }
+.mo-capcard { width: 340px; padding: 16px; }
+.mo-head { gap: 8px; }
+.mo-head b { font-size: 13px; font-weight: 600; }
+.mo-tag { margin-left: auto; padding: 3px 8px; border-radius: 8px; background: #F5F5F7; font-size: 11px; color: #6E6E73; white-space: nowrap; }
+.mo-capcard .mo-stack { margin-top: 12px; }
+/* .txt로 저장 */
+.mo-list { width: 330px; }
+.mo-li { margin-top: 9px; }
+.mo-src-s { font-size: 11px; color: #6E6E73; }
+.mo-list .mo-btn { margin-top: 14px; }
+.mo-file { display: flex; align-items: center; gap: 12px; padding: 12px 18px 12px 12px; }
+.mo-doc { position: relative; flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 10px; background: #F5F5F7; }
+.mo-doc svg { width: 26px; height: 26px; fill: #FFFFFF; stroke: #1D1D1F; stroke-width: 1.4; stroke-linejoin: round; }
+.mo-doc b { position: absolute; bottom: 7px; padding: 1px 3px; border-radius: 3px; background: #F2542D; color: #FFFFFF; font-size: 7px; font-weight: 800; line-height: 1.2; }
+.mo-fname { font-size: 12.5px; }
+/* 화면 공유: 발표 화면(도형) 위로 떠 있는 자막 창 */
+.mo-slide { width: 300px; height: 164px; }
+.mo-on-air { position: absolute; left: 14px; top: 12px; display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 8px; background: rgba(242,84,45,0.1); color: #C2381A; font-size: 10.5px; font-weight: 600; }
+.mo-on-air i { width: 6px; height: 6px; border-radius: 50%; background: #F2542D; }
+.mo-sh { position: absolute; left: 14px; border-radius: 4px; background: #E8E8ED; }
+.mo-sh-1 { top: 46px; width: 150px; height: 14px; background: #D2D2D7; }
+.mo-sh-2 { top: 68px; width: 96px; height: 8px; }
+.mo-chart { position: absolute; left: 14px; bottom: 16px; display: flex; align-items: flex-end; gap: 8px; height: 56px; }
+.mo-chart i { width: 18px; border-radius: 4px 4px 2px 2px; background: #D2D2D7; }
+.mo-chart i:last-child { background: #F2542D; }
+.mo-win { translate: 96px 50px; width: 176px; padding: 10px 12px 12px; border-radius: 14px; background: #FFFFFF; box-shadow: 0 0 0 .5px rgba(0,0,0,0.1), 0 14px 30px -8px rgba(0,0,0,0.28); }
+.mo-win-h { display: flex; align-items: center; gap: 6px; margin-bottom: 4px !important; font-size: 10.5px; font-weight: 600; color: #6E6E73; }
+.mo-win .mo-tr-s { font-size: 12px; }
+/* 오픈 소스 */
+.mo-code { --bg: #1D1D1F; width: 300px; padding: 14px 18px 16px; font: 12px/20px ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+/* 페이지의 :lang(ko|ja) 글꼴 규칙이 코드 줄에 직접 걸리지 않게 카드의 고정폭 글꼴을 물려받게 한다 */
+.mo-code :is(p, span, b, u):not(.mo-badge) { font-family: inherit; }
+.mo-path { margin-bottom: 4px !important; font-size: 11px; color: rgba(235,235,245,0.5); }
+.mo-code b { font-weight: 500; color: #FF8A66; }
+.mo-code u { text-decoration: none; color: #A8C7FA; }
+.mo-badge { position: absolute; top: -10px; right: -10px; padding: 5px 10px; border-radius: 980px; background: #D4401C; color: #FFFFFF; font: 700 11px/1 var(--font); box-shadow: 0 6px 14px -4px rgba(212,64,28,0.5); }
+
+/* 움직이는 무대: 층은 처음에 투명하고, 가운데 판·커서는 스크립트가 만든다. 판은 조각을 옮기고 늘리기만 한다. */
+.mo-live .mo-l { opacity: 0; }
+.mo-live :is(.mo-l, [data-a]) { will-change: transform, opacity, filter; }
+.mo-live .mo-cover, .mo-surf, .mo-pl, .mo-pc, .mo-cur { will-change: transform, opacity; }
+.mo-surf { position: absolute; left: 50%; top: 50%; filter: drop-shadow(0 0 .5px rgba(0,0,0,0.2)) drop-shadow(0 10px 16px rgba(0,0,0,0.09)); }
+.mo-pl, .mo-pc { position: absolute; left: 0; top: 0; }
+.mo-pc { transform-origin: 0 0; background: #FFFFFF; }
+.mo-pb { width: 100px; height: 100px; }
+.mo-po { border-radius: 50%; }
+.mo-pd .mo-pc { background: #1D1D1F; }
+.mo-cur { position: absolute; left: 50%; top: 50%; z-index: 3; transform-origin: 0 0; opacity: 0; pointer-events: none; }
+.mo-cur svg { position: absolute; left: -3px; top: -2px; overflow: visible; fill: #FFFFFF; stroke: #1D1D1F; stroke-width: 1.3; stroke-linejoin: round; filter: drop-shadow(0 2px 3px rgba(0,0,0,0.28)); }
+.mo-ring { position: absolute; left: -16px; top: -16px; width: 32px; height: 32px; border-radius: 50%; background: rgba(29,29,31,0.16); opacity: 0; }
+
+/* 장면 대화 상자: 바탕은 카드에서 커지는 조각 판(.mo-plate)이고, 다 커지면 상자 자신이 바탕을 칠한다(.is-set). */
+.mo-dlg { box-sizing: border-box; width: min(880px, calc(100vw - 32px)); max-width: none; margin: auto; padding: 0; border: 0; background: transparent; color: #1D1D1F; overflow: visible; }
+.mo-dlg.is-set { background: #F5F5F7; border-radius: 28px; }
+.mo-dlg.is-set .mo-plate { visibility: hidden; }
+.mo-dlg::backdrop { background: rgba(0,0,0,0.32); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); opacity: 0; transition: opacity .3s; }
+.mo-dlg.is-in::backdrop { opacity: 1; }
+.mo-plate { position: absolute; left: 0; top: 0; }
+.mo-bg .mo-pc { background: #F5F5F7; }
+.mo-in { position: relative; display: flex; flex-direction: column; padding: 30px 32px 22px; }
+.mo-title { margin: 0; padding-right: 44px; font-size: 28px; line-height: 1.2; font-weight: 700; letter-spacing: -0.02em; }
+.mo-desc { margin: 8px 0 0; max-width: 580px; font-size: 17px; line-height: 1.5; color: #6E6E73; }
+.mo-area { position: relative; height: calc(240px * var(--s, 1) + 40px); margin-top: 8px; }
+.mo-area .mo-stage { position: absolute; left: 50%; top: 50%; margin: -120px 0 0 -192px; transform: scale(var(--s, 1)); }
+.mo-x { position: absolute; top: 18px; right: 18px; display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 50%; background: rgba(0,0,0,0.06); color: #1D1D1F; cursor: pointer; }
+.mo-x:hover { background: rgba(0,0,0,0.1); }
+.mo-pause { align-self: center; display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border: 0; border-radius: 980px; background: rgba(0,0,0,0.05); color: #424245; font: inherit; font-size: 13px; cursor: pointer; }
+.mo-pause:hover { background: rgba(0,0,0,0.09); }
+.mo-pause .i-play, .mo-pause[aria-pressed="true"] .i-pause { display: none; }
+.mo-pause[aria-pressed="true"] .i-play { display: block; }
+@media (prefers-reduced-motion: reduce) {
+  .dt-flip, .mo-dlg::backdrop { transition: none; }
+  .mo-pause { display: none; }
+}
 
 /* ── 개인정보: 자막이 글자마다 나타났다가 흩어져 사라진다(저장하지 않음). 신호 점만 두 사람 사이를 오간다. ── */
 .privacy { margin-top: 180px; background: #000000; color: #F5F5F7; padding: 140px 20px 120px; text-align: center; overflow: hidden; }
@@ -354,7 +498,11 @@ a:hover { text-decoration: underline; }
   .vm-tile { flex: 1 1 0; height: 150px; }
   .hist-mini { flex: 1 1 100%; min-height: 150px; }
   .mode-light { padding: 28px 28px 0; border-radius: 24px; }
-  .details li { padding: 24px; }
+  .dt-front { padding: 24px; }
+  .mo-in { padding: 22px 20px 16px; }
+  .mo-title { font-size: 24px; }
+  .mo-desc { font-size: 15px; }
+  .mo-x { top: 12px; right: 12px; }
   .details h3 { font-size: 36px; }
 
   .privacy { margin-top: 120px; padding: 96px 16px 88px; }

@@ -1,11 +1,14 @@
 ---
-// 소개 페이지(design/v2/source/MainFull.dc.html). 밝은 화면만 쓰고, 스크립트 없이 CSS 애니메이션만 쓴다.
+// 소개 페이지(design/v2/source/MainFull.dc.html). 밝은 화면만 쓰고, 움직임은 CSS 애니메이션이다.
+// 스크립트는 맨 아래의 작은 로더 하나뿐이다(기능 카드의 장면 모듈을 필요할 때 불러온다).
 import type { Dict } from '../i18n/en'
 import Base from '../layouts/Base.astro'
 import { COMPANY, GITHUB_URL, legalLinks, LOCALES, SIGN_IN_URL, SIGNUP_URL, SITE_URL } from '../site'
 import Business from './Business.astro'
 import Gemini from './Gemini.astro'
 import Mark from './Mark.astro'
+import MotionScript from './MotionScript.astro'
+import Scene from './Scene.astro'
 import '../styles/landing.css'
 
 interface Props { t: Dict }
@@ -238,16 +241,49 @@ const jsonLd = [
       </div>
     </section>
 
+    {/* 카드에 마우스를 올리거나 키보드로 오면 뒤집혀 장면의 핵심 상태가 보이고(CSS), 누르면 카드가 대화 상자로 커지며 장면이 움직인다.
+        첫 화면에는 스크립트가 아래의 작은 로더뿐이고, 움직임 모듈(src/motion/)은 카드에 처음 다가갈 때 받는다. */}
     <section class="sec" aria-labelledby="details-title">
       <h2 id="details-title" class="h-md">{t.detailsTitle}</h2>
       <ul class="details">
-        {t.details.map((d) => (
-          <li>
-            <h3>{d.title}</h3>
-            <p class="body-17">{d.body}</p>
+        {t.details.map((d, i) => (
+          <li data-desc={d.desc}>
+            <button class="dt-btn" type="button" aria-haspopup="dialog" aria-labelledby={`dt-${i}`} aria-describedby={`dt-${i}-d`}></button>
+            <div class="dt-flip">
+              <div class="dt-face dt-front">
+                <h3 id={`dt-${i}`}>{d.title}</h3>
+                <p id={`dt-${i}-d`} class="body-17">{d.body}</p>
+              </div>
+              <div class="dt-face dt-back" aria-hidden="true">
+                <div class="dt-prev"><Scene t={t} scene={d.scene} /></div>
+                <p class="dt-hint">
+                  <svg width="18" height="18" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="currentColor" /><path fill="#FFFFFF" d="M10 8.2v7.6l6-3.8z" /></svg>
+                  <span class="dt-hint-ptr">{t.motion.hint}</span><span class="dt-hint-touch">{t.motion.hintTouch}</span>
+                </p>
+              </div>
+            </div>
           </li>
         ))}
       </ul>
+      {/* 장면을 크게 보여 주는 대화 상자. 열려 있지 않으면 그리지 않는다. 제목·설명은 누른 카드에서 채운다. */}
+      <dialog class="mo-dlg" aria-labelledby="mo-t" aria-describedby="mo-d">
+        <div class="mo-plate" aria-hidden="true"></div>
+        <div class="mo-in">
+          <button class="mo-x" type="button" aria-label={t.motion.close} autofocus>
+            <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 2l10 10M12 2 2 12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" /></svg>
+          </button>
+          <h2 id="mo-t" class="mo-title"></h2>
+          <p id="mo-d" class="mo-desc"></p>
+          <div class="mo-area"></div>
+          <button class="mo-pause" type="button" aria-pressed="false">
+            <svg class="i-pause" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path fill="currentColor" d="M3 2h2v8H3zM7 2h2v8H7z" /></svg>
+            <svg class="i-play" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path fill="currentColor" d="M3 1.8v8.4L10 6z" /></svg>
+            {t.privacyPause}
+          </button>
+        </div>
+      </dialog>
+      {/* 움직임 모듈의 주소만 여기 둔다. template 안의 script는 실행되지도 받아지지도 않는다(로더가 src를 읽어 import한다). */}
+      <template id="mo-src"><MotionScript /></template>
     </section>
 
     {/* 개인정보: 자막이 글자마다 나타났다가 흩어져 사라진다(저장하지 않음). 신호 점만 두 사람 사이를 오간다. */}
@@ -370,4 +406,37 @@ const jsonLd = [
       </div>
     </div>
   </footer>
+  {/* 로더(빌드 후 페이지에 인라인, 1KB 미만): 카드에 처음 다가가면 움직임 모듈을 미리 받고, 누르면 연다.
+      터치 화면(hover 없음)은 첫 탭에 카드를 뒤집기만 하고 두 번째 탭에 연다. */}
+  <script>
+    const list = document.querySelector<HTMLElement>('.details')
+    const src = document.querySelector<HTMLTemplateElement>('#mo-src')?.content.querySelector('script')?.getAttribute('src')
+    if (list && src) {
+      let ready: Promise<unknown> | undefined
+      // import() 대신 script 요소로 받는다(번들러가 import()에 붙이는 미리 받기 도우미 없이 로더가 작게 인라인된다).
+      // 받기에 실패하면(네트워크 등) 다음 시도에서 다시 받는다.
+      const load = () => (ready ??= new Promise((done, fail) => {
+        const s = document.createElement('script')
+        s.type = 'module'
+        s.src = src
+        s.onload = done
+        s.onerror = () => { s.remove(); ready = undefined; fail(new Error(`failed to load ${src}`)) }
+        document.head.append(s)
+      }))
+      const warm = () => void load().catch(console.error)
+      list.addEventListener('pointerover', warm, { once: true })
+      list.addEventListener('focusin', warm, { once: true })
+      const touch = matchMedia('(hover: none)')
+      list.addEventListener('click', (e) => {
+        const card = (e.target as Element).closest('li')
+        if (!card) return
+        if (touch.matches && !card.classList.contains('is-flip')) {
+          list.querySelector('.is-flip')?.classList.remove('is-flip')
+          card.classList.add('is-flip')
+          return
+        }
+        load().then(() => card.dispatchEvent(new Event('mo-open', { bubbles: true })), console.error)
+      })
+    }
+  </script>
 </Base>
