@@ -10,8 +10,16 @@
 body { margin: 0; background: #FFFFFF; color: #1D1D1F; font-family: var(--font); -webkit-text-size-adjust: 100%; overflow-wrap: break-word; }
 /* 한국어는 어절 단위로 줄을 바꾼다. 일본어는 히라기노를 한국어 글꼴(Apple SD Gothic Neo)보다 먼저 써서 일본어 글자 모양으로 보이게 한다. */
 :lang(ko) { word-break: keep-all; font-family: var(--font); }
-:lang(ja) { word-break: normal; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Apple SD Gothic Neo", "Pretendard JP Variable", "Pretendard JP", system-ui, sans-serif; }
+/* 한국어 안에 낀 일본어는 keep-all을 물려받지 않게 lang이 바뀌는 곳에서만 되돌린다(모든 일본어 요소에 주면 아래 문절 줄바꿈이 안쪽 span까지 물려 내려가지 않는다). */
+[lang|="ja"] { word-break: normal; }
+:lang(ja) { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Apple SD Gothic Neo", "Pretendard JP Variable", "Pretendard JP", system-ui, sans-serif; }
+/* 일본어 큰 글씨(제목·한 줄 문구·소개 문단·예시 자막)는 낱말 중간("翻訳アプ/リ", "大丈夫で/すか")에서 끊기지 않게 문절 단위로 줄을 바꾼다(Chrome·Edge).
+   auto-phrase를 모르는 브라우저(Safari)는 기본 동작. keep-all을 대비책으로 쓰면 긴 구절의 긴급 줄바꿈이 "、"를 줄 첫머리에 남긴다. */
 :is(h1, h2, h3):lang(ja) { word-break: auto-phrase; }
+:is(.statement p, .hero-lead, .engine-lead, .modes-lead, .privacy-lead, .pricing-lead, .speed-title, .context-title, .mode-video-title, .mode-title, .fl-tr, .hl-tr, .cs-tr, .tb-tr, .ph-tr, .pv-tr, .mo-title):lang(ja),
+:is(.hl-tr, .cs-tr, .fl-tr, .tb-tr, .ph-tr, .pv-tr) [lang|="ja"] { word-break: auto-phrase; }
+/* 가운데 정렬한 짧은 소개 문단은 줄 길이를 고르게(마지막 줄에 "ます。" "nor captions." 같은 꼬리만 남지 않게) */
+:is(.hero-title, .hero-lead, .engine-lead, .modes-lead, .privacy-lead, .pricing-lead) { text-wrap: balance; }
 /* 문단 끝에 한두 글자만 따로 떨어지지 않게(일본어 "す。" 등). 지원하지 않는 브라우저는 그냥 무시한다. */
 p { text-wrap: pretty; }
 a { color: #C2381A; text-decoration: none; }
@@ -56,6 +64,9 @@ a:hover { text-decoration: underline; }
 .hero-title { margin: 18px 0 0; font-size: clamp(44px, 6vw, 84px); line-height: 1.05; font-weight: 700; letter-spacing: -0.015em; }
 /* 일본어 제목은 글자가 넓어 휴대폰에서 한 문장이 세 줄로 쪼개지지 않게 조금 더 작아질 수 있게 한다 */
 .hero-title:lang(ja) { font-size: clamp(34px, 6vw, 84px); }
+/* 휴대폰에서 첫 문장이 "言葉は、それぞれの / 言語で。"로 꼬리만 남지 않게 첫 화면 제목은 "、" "。" 뒤에서만 끊는다(모든 브라우저).
+   가장 긴 구절 "それぞれの言語で。"(9자)는 아래 휴대폰 글자 크기(min(34px, 9vw))로 320px에서도 한 줄에 들어간다. */
+.hero-title:lang(ja) { word-break: keep-all; }
 .hero-lead { margin: 22px 0 0; max-width: 680px; font-size: clamp(19px, 1.8vw, 24px); line-height: 1.4; color: #6E6E73; }
 .hero-cta { display: flex; flex-wrap: wrap; justify-content: center; gap: 16px 28px; align-items: center; margin-top: 30px; }
 .hero-cta .btn { padding: 13px 26px; font-size: 18px; }
@@ -565,6 +576,8 @@ a:hover { text-decoration: underline; }
 /* 머리: 두 줄. 윗줄은 로고와 언어·로그인·시작하기, 아랫줄은 구역 링크. */
 @media (max-width: 860px) {
   .plans { grid-template-columns: minmax(0, 1fr); }
+  /* 한 줄에 하나씩 쌓이면 1일권 절취선과 높이를 맞출 필요가 없으므로 다른 카드의 빈 자리를 없앤다 */
+  .plan:not(.plan-day) .plan-perf { display: none; }
   .nav-in { height: auto; padding: 8px 16px 6px; justify-content: flex-end; gap: 4px 12px; }
   .nav-brand { margin-right: auto; }
   .nav-links { order: 1; flex: 1 1 100%; justify-content: center; flex-wrap: wrap; column-gap: 20px; }
@@ -618,6 +631,8 @@ a:hover { text-decoration: underline; }
 }
 /* 아주 좁은 화면: 언어 알약은 지구본만(디자인 규칙). 이름은 화면 읽기 프로그램에 그대로 남는다. */
 @media (max-width: 480px) {
+  /* 일본어 첫 화면 제목의 "それぞれの言語で。"(9자)가 아주 좁은 휴대폰에서도 한 줄에 들어가게 */
+  .hero-title:lang(ja) { font-size: min(34px, 9vw); }
   .lang-cur { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .lang summary { gap: 3px; padding: 0 8px 0 7px; }
   .nav-links { column-gap: 16px; }

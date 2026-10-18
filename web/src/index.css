@@ -11,9 +11,10 @@ h1, h2 { font-weight: 600; margin: 0; }
 h1 { text-wrap: balance; }
 .lead { text-wrap: pretty; }
 /* 한국어는 어절 단위로 줄바꿈한다. 좁은 칸에서 "듣/는/중"처럼 한 글자씩 쪼개지거나 한 글자만 다음 줄로 떨어지지 않게.
-   어절이 칸보다 길 때만 그 안에서 끊는다. word-break는 상속되므로 띄어쓰기 없는 일본어·중국어는 기본 동작으로 되돌린다. */
-:lang(ko) { word-break: keep-all; overflow-wrap: break-word; }
-:lang(ja), :lang(zh) { word-break: normal; }
+   어절이 칸보다 길 때만 그 안에서 끊는다. lang이 바뀌는 곳에만 걸어 상속으로 내려가게 한다(모든 요소에 걸면 조상이 준
+   overflow-wrap: anywhere 같은 값을 덮는다). 한국어 안의 일본어·중국어(띄어쓰기 없음)는 기본 동작으로 되돌린다. */
+[lang|="ko"] { word-break: keep-all; overflow-wrap: break-word; }
+[lang|="ja"], [lang|="zh"] { word-break: normal; }
 /* 일본어는 지원 브라우저(Chrome 119+)에서 문절 단위로 줄바꿈. 미지원 브라우저는 기본 동작. */
 :lang(ja) :is(h1, h2) { word-break: auto-phrase; }
 .icon { width: 1em; height: 1em; font-size: 24px; flex: none; fill: currentColor; display: inline-block; vertical-align: middle; }
@@ -216,6 +217,12 @@ body { background: var(--page-bg); color: var(--text); }
 .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--divider); }
 .auth-link { align-self: center; padding: 0; background: none; color: var(--accent-text); font-size: var(--text-sm); font-weight: 600; text-decoration: none; cursor: pointer; }
 .auth-link:hover { text-decoration: underline; }
+/* 터치 화면: 글자 링크·회의실 위 작은 언어 알약은 레이아웃은 그대로 두고 누르는 범위만 넓힌다(약 44px 높이). */
+@media (pointer: coarse) {
+  :is(.link-btn, .auth-link, .room-meta .select-trigger) { position: relative; }
+  :is(.link-btn, .auth-link)::after { content: ""; position: absolute; inset: -12px -4px; }
+  .room-meta .select-trigger::after { content: ""; position: absolute; inset: -8px -4px; }
+}
 .auth-switch { margin: 0; text-align: center; color: var(--text-secondary); font-size: var(--text-sm); }
 .auth-switch a, .auth-foot a { color: var(--accent-text); font-weight: 600; text-decoration: none; }
 .auth-switch a:hover, .auth-foot a:hover { text-decoration: underline; }
@@ -411,6 +418,8 @@ body { background: var(--page-bg); color: var(--text); }
 .checkout-main { display: flex; flex-direction: column; gap: var(--space-5); }
 .checkout-main h1 { font-size: clamp(28px, 4vw, 40px); letter-spacing: -0.02em; }
 .choice-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--space-3); }
+/* 휴대폰에서는 폭과 상관없이 한 줄에 하나(큰 휴대폰에서 2+1로 갈라져 높이가 어긋나지 않게) */
+@media (max-width: 560px) { .choice-grid { grid-template-columns: minmax(0, 1fr); } }
 .choice { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 18px 20px; border-radius: 16px; background: var(--panel-bg); color: var(--text); text-align: left; box-shadow: inset 0 0 0 1px var(--border); transition: box-shadow var(--duration); }
 .choice.on { box-shadow: inset 0 0 0 2px var(--brand-accent); }
 .choice-top { display: flex; align-items: center; justify-content: space-between; width: 100%; font-weight: 600; }
