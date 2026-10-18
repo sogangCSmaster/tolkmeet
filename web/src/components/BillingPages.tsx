@@ -472,20 +472,24 @@ export function PaidDone() {
   if (!user) return <div className="shell" />
   // 새로 산 요금제가 아직 준비되지 않았으면 시간을 산 경우처럼 "결제를 받았어요"만 보인다.
   const planShown = plan != null && (ready || changed)
+  // 웹훅을 기다리며 다시 확인하는 동안: 멈춘 화면처럼 보이지 않게 확인 중임을 알리고 돌아가는 원을 보인다.
+  const checking = !ready && !stalled && !planShown
   const title = planShown
     ? t('paid.title', { plan: plan === 'pro' ? 'Pro' : 'Basic' })
     : ready && hours
       ? t('paid.hoursTitle', { n: String(hours) })
       : ready && item === 'day'
         ? t('paid.dayTitle')
-        : t('paid.receivedTitle')
+        : checking
+          ? t('paid.checkingTitle')
+          : t('paid.receivedTitle')
   const lead = planShown
     ? changed
       ? t(plan === 'pro' ? 'paid.upgradeLead' : 'paid.downgradeLead', { email: user.email })
       : t('paid.lead', { email: user.email, hours: plan === 'pro' ? '20' : '8' })
     : ready && item === 'day' && dayUntil != null
       ? t('paid.dayLead', { email: user.email, until: formatDateTime(dayUntil, locale) })
-      : t(ready && item === 'hours' ? 'paid.hoursLead' : 'paid.receivedLead', { email: user.email })
+      : t(ready && item === 'hours' ? 'paid.hoursLead' : checking ? 'paid.checkingLead' : 'paid.receivedLead', { email: user.email })
   return (
     <div className="shell">
       <Header />
@@ -497,6 +501,7 @@ export function PaidDone() {
           <h1>{title}</h1>
           <p className="lead">{lead}</p>
         </div>
+        {checking && <span className="spinner" aria-hidden="true" />}
         {planShown && (
           <ol className="steps3">
             <li>
