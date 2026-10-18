@@ -39,5 +39,16 @@ meet.tolkmeet.com {
 			roll_size 20MiB
 			roll_keep 3
 		}
+		# 메일 링크의 1회용 토큰·코드, 로그인 흐름 값은 접속 기록에 남기지 않는다.
+		format filter {
+			request>uri query {
+				delete token
+				delete code
+				delete state
+				delete mfa
+				delete email
+				delete next
+			}
+		}
 	}
 }

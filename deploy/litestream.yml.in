@@ -3,6 +3,9 @@ snapshot:
   interval: 6h
   retention: 24h
 
+# 변경분은 1분마다 모아 올린다(올리는 횟수·요금을 묶는다). 서버가 통째로 사라지면 마지막 1분까지 잃을 수 있다.
+sync-interval: 1m
+
 dbs:
   - path: /var/lib/tolkmeet/tolkmeet.db
     replica:

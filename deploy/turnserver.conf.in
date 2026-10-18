@@ -14,6 +14,9 @@ no-cli
 no-tls
 no-dtls
 no-multicast-peers
+# WebRTC는 UDP 중계만 쓴다. TCP 중계(RFC 6062)와 IPv6 중계는 열지 않는다(사설 IPv4로만 중계).
+no-tcp-relay
+relay-ip=172.26.14.178
 # 중계로 서버 내부·사설망·클라우드 메타데이터(169.254.169.254)에 닿지 못하게 막는다.
 denied-peer-ip=0.0.0.0-0.255.255.255
 denied-peer-ip=10.0.0.0-10.255.255.255
@@ -29,6 +32,11 @@ denied-peer-ip=198.51.100.0-198.51.100.255
 denied-peer-ip=203.0.113.0-203.0.113.255
 denied-peer-ip=224.0.0.0-255.255.255.255
 denied-peer-ip=::1
+denied-peer-ip=::
+denied-peer-ip=::-::ffff:ffff
+denied-peer-ip=::ffff:0.0.0.0-::ffff:255.255.255.255
+# 서버 자신(공인 주소)으로도 중계하지 않는다.
+denied-peer-ip=3.39.109.1
 denied-peer-ip=64:ff9b::-64:ff9b::ffff:ffff
 denied-peer-ip=fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
 denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff

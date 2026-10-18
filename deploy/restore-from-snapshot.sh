@@ -36,7 +36,9 @@ echo "restoring the database from S3"
 	ts=$(date -u +%Y%m%d%H%M%S)
 	sudo mkdir -p /var/lib/tolkmeet/before-restore-$ts
 	sudo sh -c "mv /var/lib/tolkmeet/tolkmeet.db* /var/lib/tolkmeet/before-restore-$ts/ 2>/dev/null || true"
-	sudo -u tolkmeet sh -c "set -a; . /etc/tolkmeet/litestream.env; litestream restore -config /etc/litestream.yml /var/lib/tolkmeet/tolkmeet.db"
+	# 백업 키(litestream.env)는 root만 읽으므로 root로 되살리고 앱 사용자에게 넘긴다.
+	sudo sh -c "set -a; . /etc/tolkmeet/litestream.env; litestream restore -config /etc/litestream.yml /var/lib/tolkmeet/tolkmeet.db"
+	sudo chown tolkmeet:tolkmeet /var/lib/tolkmeet/tolkmeet.db*
 	sudo systemctl start tolkmeet litestream
 	for _ in $(seq 1 30); do curl -fsS -o /dev/null http://127.0.0.1:8080/api/health && break; sleep 1; done
 '
