@@ -402,6 +402,7 @@ impl Billing {
             adjusted_transaction: text(&data["transaction_id"]),
             adjusted_full: data["type"].as_str() == Some("full"),
             adjusted_amount: minor(&data["totals"]["total"]).unwrap_or(0),
+            compensation: data["reason"].as_str().is_some_and(|r| r.trim_start().to_ascii_lowercase().starts_with("outage")),
         })
     }
 
@@ -520,6 +521,8 @@ struct Event {
     adjusted_transaction: Option<String>,
     adjusted_full: bool,
     adjusted_amount: i64,
+    /// 장애 보상 환불(조정 사유가 "outage"로 시작). 운영자가 Paddle에서 환불할 때 사유로 표시한다.
+    compensation: bool,
 }
 
 impl Event {
@@ -863,12 +866,15 @@ impl Event {
                             params![user, s],
                         )?;
                     }
-                    // 아직 남은 일일권이 있으면 시간을 합치고, 끝나는 때는 새로 산 때부터 24시간으로 옮긴다.
-                    // 끝난 일일권의 남은 시간은 버린다. 늦게 온 옛 결제가 더 늦게 산 일일권의 끝을 당기지 않게 한다.
+                    // 일일권은 남은 시간이 없을 때만 판다(`checkout`). 두 결제창에서 거의 동시에 산 경우처럼 남은 시간이 있으면
+                    // 낸 것이므로 합친다. 끝난 일일권의 남은 시간은 버리고, 늦게 온 옛 결제가 더 늦게 산 일일권의 끝을 당기지 않게 한다.
+                    // 남은 시간이 없을 때 산 일일권은 새 잔액을 시작하고(`day_since`), 합쳐진 일일권들은 그 뒤에 산 것이다.
+                    // 환불은 `day_since` 뒤에 산 일일권일 때만 지금 잔액에서 뺀다.
                     Grant::Day(a) => {
                         tx.execute(
                             "UPDATE users SET
-                               day_seconds = CASE WHEN day_until > ?3 THEN day_seconds ELSE 0 END + ?2,
+                               day_seconds = CASE WHEN day_until > ?3 AND day_seconds > 0 THEN day_seconds ELSE 0 END + ?2,
+                               day_since = CASE WHEN day_until > ?3 AND day_seconds > 0 THEN MIN(COALESCE(day_since, ?3), ?3) ELSE ?3 END,
                                day_until = MAX(COALESCE(day_until, 0), ?3 + ?4)
                              WHERE id = ?1",
                             params![user, DAY_PASS_SECONDS, a, DAY_PASS_LENGTH],
@@ -980,8 +986,11 @@ impl Event {
             "UPDATE paddle_transactions SET refunded = ?2 WHERE id = ?1",
             params![txn, refunded],
         )?;
-        // 추가 시간·차액으로 준 시간 중 돌려준 몫(누적)만큼 다시 뺀다(처음·갱신 결제의 시간은 요금제로 다룬다).
-        let target = if whole { seconds } else { seconds * refunded / total };
+        // 고객이 요청한 환불은 금액과 상관없이 그 결제로 받은 이용을 끝낸다(환불 정책: 쓴 시간과 결제 처리 비용을 뺀
+        // 나머지를 돌려주므로, 남은 시간을 계속 쓰게 두면 그만큼 손해다). 장애 보상만 돌려준 비율만큼 다룬다.
+        let ends_use = !self.compensation;
+        // 추가 시간·일일권·차액으로 준 시간 중 돌려준 몫(누적)만큼 다시 뺀다(처음·갱신 결제의 시간은 요금제로 다룬다).
+        let target = if ends_use || whole { seconds } else { seconds * refunded / total };
         let back = (target - seconds_back).max(0);
         let returns_hours = kind == "hours" || kind == "day" || origin == "subscription_update";
         if returns_hours {
@@ -997,19 +1006,18 @@ impl Event {
                 params![user, back],
             )?;
         } else if kind == "day" {
-            // 그 일일권의 24시간이 지났으면 뺄 것이 없다(지금 남은 시간은 따로 낸 다른 일일권의 것이다).
-            // 아직이면 돌려준 몫만큼 빼고(이미 쓴 몫은 되돌릴 수 없다), 그래서 남은 시간이 없을 때만 일일권을 끝낸다
-            // (합쳐진 다른 일일권의 시간은 남긴다).
-            if period.is_some_and(|p| p + DAY_PASS_LENGTH > now) {
-                tx.execute(
-                    "UPDATE users SET day_seconds = MAX(0, day_seconds - ?2),
-                       day_until = CASE WHEN day_seconds - ?2 <= 0 THEN MIN(COALESCE(day_until, 0), ?3) ELSE day_until END
-                     WHERE id = ?1",
-                    params![user, back, now],
-                )?;
-            }
-        // 차지백은 언제나, 전액 환불은 지금 기간의 결제일 때만 요금제를 끝낸다(지난 기간 결제의 환불은 따로 낸 지금 기간을 끝내지 않는다).
-        } else if self.action == "chargeback" || (whole && origin != "subscription_update" && period.is_some() && period == current_period) {
+            // 지금 잔액에 들어 있는 일일권(잔액이 시작된 뒤에 산 것)의 환불일 때만 뺀다. 그 전에 끝난 일일권의 시간은
+            // 남아 있지 않고, 지금 남은 시간은 따로 낸 다른 일일권의 것이라 건드리지 않는다. 남은 시간이 없어지면 일일권을 끝낸다.
+            tx.execute(
+                "UPDATE users SET day_seconds = MAX(0, day_seconds - ?2),
+                   day_until = CASE WHEN day_seconds - ?2 <= 0 THEN MIN(COALESCE(day_until, 0), ?3) ELSE day_until END
+                 WHERE id = ?1 AND day_until > ?3 AND ?4 >= day_since",
+                params![user, back, now, period],
+            )?;
+        // 차지백은 언제나, 고객 환불은 지금 기간의 결제일 때만 요금제를 끝낸다(지난 기간 결제의 환불은 따로 낸 지금 기간을 끝내지 않는다).
+        } else if self.action == "chargeback"
+            || (ends_use && origin != "subscription_update" && period.is_some() && period == current_period)
+        {
             if let Some(sub) = subscription.or_else(|| self.subscription_ref.clone()) {
                 tx.execute(
                     "UPDATE users SET plan = 'none', plan_canceled = 0, plan_renews_at = NULL WHERE id = ?1 AND paddle_subscription_id = ?2",
@@ -1025,7 +1033,7 @@ impl Event {
                 params![user, back, period],
             )?;
         } else {
-            tracing::info!(event = %self.id, transaction = %txn, "partial or past-period refund of a subscription payment: plan kept");
+            tracing::info!(event = %self.id, transaction = %txn, "outage credit or past-period refund of a subscription payment: plan kept");
         }
         Ok(out)
     }
@@ -1676,6 +1684,12 @@ mod tests {
     }
 
     /// 조정 웹훅. 대기 중인 환불은 만들 때(created), 승인은 상태가 바뀔 때(updated) 온다.
+    /// 장애 보상으로 표시한 조정(사유 "outage ...")
+    fn outage(mut v: Value) -> Value {
+        v["data"]["reason"] = json!("outage credit");
+        v
+    }
+
     fn adjustment(event: &str, id: &str, action: &str, status: &str, txn: &str, full: bool, total: &str) -> Value {
         let kind = if status == "pending_approval" { "adjustment.created" } else { "adjustment.updated" };
         json!({ "event_id": event, "event_type": kind, "occurred_at": "2026-10-10T00:00:00Z",
@@ -1715,29 +1729,34 @@ mod tests {
         b.apply_event(&db, pass("d1b", "txn_d1", t0)).await.unwrap();
         assert_eq!(day(), (DAY_PASS_SECONDS, Some(t0 + DAY_PASS_LENGTH), "none".into()));
         assert_eq!(row(&db, uid).extra, 0);
-        // 남아 있을 때 하나 더 사면 시간을 합치고 끝나는 때를 새로 산 때부터 24시간으로 옮긴다.
+        // 지금 일일권을 다 쓴 뒤 새로 사면 그 일일권이 지금 일일권이 된다. 끝나기 전에 산 옛 일일권(d1)을 환불해도
+        // 지금 일일권(d2)의 시간은 그대로다.
         let t1 = now - 60;
-        db.blocking(move |c| c.execute("UPDATE users SET day_seconds = 3600 WHERE id = ?1", params![uid])).unwrap();
+        db.blocking(move |c| c.execute("UPDATE users SET day_seconds = 0 WHERE id = ?1", params![uid])).unwrap();
         b.apply_event(&db, pass("d2", "txn_d2", t1)).await.unwrap();
-        assert_eq!(day(), (3600 + DAY_PASS_SECONDS, Some(t1 + DAY_PASS_LENGTH), "none".into()));
-        // 먼저 산 일일권(d1)을 전액 환불해도 합쳐진 다른 일일권의 시간은 남고 끝나는 때도 그대로다.
+        assert_eq!(day(), (DAY_PASS_SECONDS, Some(t1 + DAY_PASS_LENGTH), "none".into()));
         b.apply_event(&db, adjustment("r1", "adj_d1", "refund", "approved", "txn_d1", true, "1200")).await.unwrap();
-        assert_eq!(day(), (3600, Some(t1 + DAY_PASS_LENGTH), "none".into()));
-        // 남은 시간이 그 일일권 몫보다 적으면 0에서 멈추고 일일권을 끝낸다.
-        b.apply_event(&db, adjustment("r2", "adj_d2", "refund", "approved", "txn_d2", true, "1200")).await.unwrap();
+        assert_eq!(day(), (DAY_PASS_SECONDS, Some(t1 + DAY_PASS_LENGTH), "none".into()));
+        // 지금 일일권의 고객 환불은 금액이 일부여도 그 일일권을 끝낸다.
+        b.apply_event(&db, adjustment("r2", "adj_d2", "refund", "approved", "txn_d2", false, "500")).await.unwrap();
         let (secs, until, _) = day();
         assert!(secs == 0 && until.unwrap() <= now_secs());
+        // 두 결제창에서 거의 동시에 사 남은 시간이 있을 때 온 결제는 낸 것이므로 합친다.
+        b.apply_event(&db, pass("d3", "txn_d3", now - 30)).await.unwrap();
+        b.apply_event(&db, pass("d4", "txn_d4", now - 20)).await.unwrap();
+        assert_eq!(day(), (2 * DAY_PASS_SECONDS, Some(now - 20 + DAY_PASS_LENGTH), "none".into()));
+        // 장애 보상은 돌려준 비율만큼만 뺀다(1200 중 600 → 3시간 중 1.5시간).
+        b.apply_event(&db, outage(adjustment("r3", "adj_d4", "refund", "approved", "txn_d4", false, "600"))).await.unwrap();
+        assert_eq!(day().0, 2 * DAY_PASS_SECONDS - DAY_PASS_SECONDS / 2);
+        // 합쳐진 것 중 먼저 산 일일권을 고객 환불하면 그 시간도 지금 잔액에서 뺀다.
+        b.apply_event(&db, adjustment("r4", "adj_d3", "refund", "approved", "txn_d3", false, "500")).await.unwrap();
+        assert_eq!(day().0, DAY_PASS_SECONDS - DAY_PASS_SECONDS / 2);
         // 24시간이 다 지나서 온 결제는 받은 때부터 센다(낸 일일권을 못 쓰고 끝나지 않게).
-        b.apply_event(&db, pass("d3", "txn_d3", now - 3 * 86_400)).await.unwrap();
+        db.blocking(move |c| c.execute("UPDATE users SET day_seconds = 0, day_until = ?2 WHERE id = ?1", params![uid, now - 1]))
+            .unwrap();
+        b.apply_event(&db, pass("d5", "txn_d5", now - 3 * 86_400)).await.unwrap();
         let (secs, until, _) = day();
         assert!(secs == DAY_PASS_SECONDS && until.unwrap() >= now + DAY_PASS_LENGTH);
-        // 끝난 일일권의 환불은 지금 남은(따로 낸) 일일권을 건드리지 않는다.
-        db.blocking(move |c| {
-            c.execute("UPDATE paddle_transactions SET period_start = ?1 WHERE id = 'txn_d3'", params![now - 3 * 86_400])
-        })
-        .unwrap();
-        b.apply_event(&db, adjustment("r3", "adj_d3", "refund", "approved", "txn_d3", true, "1200")).await.unwrap();
-        assert_eq!(day().0, DAY_PASS_SECONDS);
     }
 
     #[tokio::test]
@@ -1750,11 +1769,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(row(&db, uid).extra, 5 * 3600);
-        // 승인 전 환불은 반영하지 않고, 승인되면 돌려준 몫(1500 중 600 → 5시간 중 2시간)만큼 뺀다. 같은 조정은 한 번만.
-        b.apply_event(&db, adjustment("a1", "adj_1", "refund", "pending_approval", "txn_h", false, "600")).await.unwrap();
+        // 장애 보상: 승인 전에는 반영하지 않고, 승인되면 돌려준 몫(1500 중 600 → 5시간 중 2시간)만큼 뺀다. 같은 조정은 한 번만.
+        b.apply_event(&db, outage(adjustment("a1", "adj_1", "refund", "pending_approval", "txn_h", false, "600"))).await.unwrap();
         assert_eq!(row(&db, uid).extra, 5 * 3600);
-        b.apply_event(&db, adjustment("a2", "adj_1", "refund", "approved", "txn_h", false, "600")).await.unwrap();
-        b.apply_event(&db, adjustment("a3", "adj_1", "refund", "approved", "txn_h", false, "600")).await.unwrap();
+        b.apply_event(&db, outage(adjustment("a2", "adj_1", "refund", "approved", "txn_h", false, "600"))).await.unwrap();
+        b.apply_event(&db, outage(adjustment("a3", "adj_1", "refund", "approved", "txn_h", false, "600"))).await.unwrap();
         assert_eq!(row(&db, uid).extra, 3 * 3600);
         // 나머지를 모두 돌려주면 남은 3시간을 빼되, 이미 쓴 만큼은 0에서 멈춘다.
         db.blocking(|c| c.execute("UPDATE users SET extra_seconds = 3600 WHERE id = ?1", params![uid])).unwrap();
@@ -1776,14 +1795,37 @@ mod tests {
                       "items": [{ "price": { "id": "pri_pro" }, "quantity": 1 }] } }))
             .await
             .unwrap();
-        // 일부 환불(장애 보상 등)은 요금제를 그대로 둔다.
-        let partial = b.apply_event(&db, adjustment("a1", "adj_1", "refund", "approved", "txn_s", false, "1000")).await.unwrap();
+        // 장애 보상 일부 환불은 요금제를 그대로 둔다.
+        let partial = b.apply_event(&db, outage(adjustment("a1", "adj_1", "refund", "approved", "txn_s", false, "1000"))).await.unwrap();
         assert_eq!((partial.revoked, row(&db, uid).plan.as_str()), (None, "pro"));
         // 차지백(또는 전액 환불)이면 끝내고, 웹훅 처리기가 Paddle 구독을 바로 해지한다. 같은 조정이 다시 와도 한 번만.
         let charged_back = b.apply_event(&db, adjustment("a2", "adj_2", "chargeback", "approved", "txn_s", true, "2900")).await.unwrap();
         assert_eq!((charged_back.revoked.as_deref(), row(&db, uid).plan.as_str()), (Some("sub_1"), "none"));
         let again = b.apply_event(&db, adjustment("a3", "adj_2", "chargeback", "approved", "txn_s", true, "2900")).await.unwrap();
         assert_eq!(again.revoked, None);
+    }
+
+    #[tokio::test]
+    async fn customer_refunds_end_what_the_payment_gave_even_when_partial() {
+        // 환불 정책: 쓴 시간과 결제 처리 비용을 뺀 나머지만 돌려준다. 그래서 일부만 돌려줘도 그 결제로 받은 이용은 끝난다.
+        let (db, b, uid, sig) = fixture();
+        b.apply_event(&db, sub_event("e1", "subscription.activated", uid, &sig, "pri_basic", "2026-10-01T00:00:00Z", OCT))
+            .await
+            .unwrap();
+        b.apply_event(&db, paid("t1", uid, &sig, "txn_1", "web", &[("pri_basic", 1, None)], OCT)).await.unwrap();
+        let out = b.apply_event(&db, adjustment("r1", "adj_1", "refund", "approved", "txn_1", false, "1100")).await.unwrap();
+        assert_eq!((out.revoked.as_deref(), row(&db, uid).plan.as_str()), (Some("sub_1"), "none"));
+        // 추가 시간: 일부 환불이어도 그 구매의 시간을 모두 뺀다(0에서 멈춤).
+        let (db, b, uid, sig) = fixture();
+        b.apply_event(&db, json!({ "event_id": "h1", "event_type": "transaction.completed",
+            "data": { "id": "txn_h", "origin": "web", "currency_code": "USD", "custom_data": { "user_id": uid.to_string(), "sig": sig },
+                      "details": { "totals": { "grand_total": "1500" } },
+                      "items": [{ "price": { "id": "pri_hour" }, "quantity": 5 }] } }))
+            .await
+            .unwrap();
+        db.blocking(move |c| c.execute("UPDATE users SET extra_seconds = 3 * 3600 WHERE id = ?1", params![uid])).unwrap();
+        b.apply_event(&db, adjustment("r2", "adj_2", "refund", "approved", "txn_h", false, "775")).await.unwrap();
+        assert_eq!(row(&db, uid).extra, 0);
     }
 
     fn queued(db: &Db, sub: &'static str) -> Option<(bool, bool)> {

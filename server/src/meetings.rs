@@ -553,6 +553,19 @@ async fn active_plan(db: &Db, uid: i64) -> String {
     .unwrap_or_else(|_| "none".into())
 }
 
+/// 지금 일일권에 남은 시간(끝났으면 0).
+async fn day_left(db: &Db, uid: i64) -> i64 {
+    db.call(move |c| {
+        c.query_row(
+            "SELECT CASE WHEN day_until > unixepoch() THEN day_seconds ELSE 0 END FROM users WHERE id = ?1",
+            params![uid],
+            |r| r.get(0),
+        )
+    })
+    .await
+    .unwrap_or(0)
+}
+
 /// 구독 요금제(`users.plan`). 결제·요금제 바꾸기는 일일권과 상관없이 이것으로 판단한다.
 async fn plan_of(db: &Db, uid: i64) -> String {
     db.call(move |c| {
@@ -1093,6 +1106,10 @@ pub async fn checkout(
     if req.item != "hours" && plan != "none" {
         return error(StatusCode::CONFLICT, "subscribed");
     }
+    // 일일권은 지금 일일권의 시간을 다 쓴 뒤에만 판다(남은 시간을 합치면 환불이 어느 일일권의 시간인지 가를 수 없다).
+    if req.item == "day" && day_left(&db, uid).await > 0 {
+        return error(StatusCode::CONFLICT, "day_active");
+    }
     // 실제로 결제창을 열 때만 동의 시각을 남긴다.
     if !record_consent(&db, uid).await {
         return error(StatusCode::INTERNAL_SERVER_ERROR, "failed");
@@ -1279,6 +1296,9 @@ pub async fn dev_activate(
     if req.item == "day" && plan != "none" {
         return error(StatusCode::CONFLICT, "subscribed");
     }
+    if req.item == "day" && day_left(state.auth.db(), uid).await > 0 {
+        return error(StatusCode::CONFLICT, "day_active");
+    }
     let now = now_secs();
     let renews = now + billing::DEFAULT_PERIOD;
     let item = req.item.clone();
@@ -1293,7 +1313,8 @@ pub async fn dev_activate(
             ),
             // 웹훅의 일일권 반영(billing `Grant::Day`)과 같다.
             "day" => c.execute(
-                "UPDATE users SET day_seconds = CASE WHEN day_until > ?3 THEN day_seconds ELSE 0 END + ?2,
+                "UPDATE users SET day_seconds = CASE WHEN day_until > ?3 AND day_seconds > 0 THEN day_seconds ELSE 0 END + ?2,
+                   day_since = CASE WHEN day_until > ?3 AND day_seconds > 0 THEN MIN(COALESCE(day_since, ?3), ?3) ELSE ?3 END,
                    day_until = MAX(COALESCE(day_until, 0), ?3 + ?4) WHERE id = ?1",
                 params![uid, billing::DAY_PASS_SECONDS, now, billing::DAY_PASS_LENGTH],
             ),

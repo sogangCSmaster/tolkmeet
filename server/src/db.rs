@@ -224,6 +224,8 @@ const MIGRATIONS: &[&str] = &[
     "ALTER TABLE users ADD COLUMN day_seconds INTEGER NOT NULL DEFAULT 0;
      ALTER TABLE users ADD COLUMN day_until INTEGER;
      ALTER TABLE usage ADD COLUMN from_day INTEGER NOT NULL DEFAULT 0;",
+    // 13: 지금 남은 일일권 시간이 시작된 때(그때부터 산 일일권들이 합쳐져 있다). 환불이 끝난 다른 일일권의 시간을 건드리지 않게.
+    "ALTER TABLE users ADD COLUMN day_since INTEGER;",
 ];
 
 impl Db {

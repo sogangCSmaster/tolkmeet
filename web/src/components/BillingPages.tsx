@@ -173,6 +173,8 @@ export function Checkout() {
         await refreshAuth()
         return setError('checkout.subscribed')
       }
+      // 지금 일일권에 남은 시간이 있다(다 쓴 뒤에 하나 더 살 수 있다).
+      if (r.code === 'day_active') return setError('checkout.dayActive')
       // 버튼이 동의 전에는 꺼져 있으므로 보통은 오지 않는다. 서버가 동의 없음으로 거절하면 그대로 알린다.
       return setError(r.code === 'consent' ? 'checkout.consentNeeded' : 'account.billingFailed')
     }
