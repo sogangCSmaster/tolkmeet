@@ -953,11 +953,11 @@ impl Rooms {
             room.resumes
                 .retain(|_, r| r.left_at.is_none_or(|t| now.duration_since(t) < RESUME_TTL));
         }
-        // 방이 남지 않은 주최자의 토큰 한도는 지운다.
-        self.host_textless
-            .lock()
-            .unwrap()
-            .retain(|host, _| rooms.values().any(|r| &r.host_account == host));
+        // 방이 남지 않았고 한도도 다시 다 찬 주최자만 지운다(방을 지웠다 다시 만들어 깎인 한도를 되살리지 못하게).
+        self.host_textless.lock().unwrap().retain(|host, bucket| {
+            bucket.ready(now);
+            bucket.tokens < bucket.burst || rooms.values().any(|r| &r.host_account == host)
+        });
         ended
     }
 }
@@ -1668,6 +1668,16 @@ mod tests {
             }
         }
         assert_eq!(issued, HOST_TEXTLESS_TOKEN_BURST as usize);
+        // 방을 모두 닫고 정리해도 깎인 한도는 그대로다(다시 만들어 새 한도를 받지 못한다).
+        let codes: Vec<String> = rooms.rooms.lock().unwrap().keys().cloned().collect();
+        for code in codes {
+            rooms.close(&code);
+        }
+        rooms.sweep(now);
+        let code = rooms.create(HOST, ON).unwrap();
+        let host = client();
+        let host_id = joined(rooms.join(&code, req("Host"), Some(HOST), host.tx.clone()).unwrap());
+        assert!(!rooms.take_stt_token(&code, &host_id, now));
     }
 
     #[test]
