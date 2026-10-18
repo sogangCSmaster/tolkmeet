@@ -3,6 +3,7 @@
 import Base from '../layouts/Base.astro'
 import Mark from './Mark.astro'
 import Business from './Business.astro'
+import { COMPANY } from '../site'
 import { en } from '../i18n/en'
 import { ko } from '../i18n/ko'
 import '../styles/site.css'
@@ -28,7 +29,7 @@ const ui = {
     foot: { privacy: 'Privacy Policy', terms: 'Terms of Service', refund: 'Refund Policy' },
     toc: 'On this page',
     home: 'Tolkmeet home',
-    other: { lang: 'ko', label: '한국어로 보기' },
+    other: { lang: 'ko', label: '한국어' },
   },
   ko: {
     dict: ko,
@@ -36,7 +37,7 @@ const ui = {
     foot: { privacy: '개인정보처리방침', terms: '이용약관', refund: '환불 정책' },
     toc: '목차',
     home: 'Tolkmeet 홈',
-    other: { lang: 'en', label: 'Read in English' },
+    other: { lang: 'en', label: 'English' },
   },
 }[lang]
 const pages: Page[] = ['privacy', 'terms', 'refund']
@@ -84,7 +85,7 @@ const alternates: [string, string][] = [['en', href(page, 'en')], ['ko', href(pa
 
     <footer class="legal-foot">
       <Business dict={ui.dict} class="legal-biz" />
-      © 2026 {lang === 'en' ? <span lang="ko">휘슬리</span> : '휘슬리'}{pages.map((p) => <> · <a href={href(p)}>{ui.foot[p]}</a></>)} · <a class="legal-lang" href={otherHref} lang={ui.other.lang} hreflang={ui.other.lang}>{ui.other.label}</a>
+      © 2026 {COMPANY.name}{pages.map((p) => <> · <a href={href(p)}>{ui.foot[p]}</a></>)} · <a class="legal-lang" href={otherHref} lang={ui.other.lang} hreflang={ui.other.lang}>{ui.other.label}</a>
     </footer>
   </div>
 </Base>
