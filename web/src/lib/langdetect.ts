@@ -15,6 +15,8 @@ const SCRIPTS: Record<string, Script[]> = {
   es: ['latin'],
   fr: ['latin'],
   de: ['latin'],
+  'de-CH': ['latin'],
+  it: ['latin'],
   vi: ['latin'],
   th: ['thai'],
 }

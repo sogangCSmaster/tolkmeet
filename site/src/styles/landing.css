@@ -319,7 +319,7 @@ a:hover { text-decoration: underline; }
 /* 글자를 왼쪽부터 드러내는 덮개(옮기기만 한다) */
 .mo-type { position: relative; justify-self: start; width: max-content; max-width: 100%; overflow: hidden; white-space: pre; }
 .mo-cover { position: absolute; top: 0; bottom: 0; left: -24px; width: calc(100% + 48px); background: linear-gradient(90deg, transparent, var(--bg, #FFFFFF) 24px); }
-/* 9개 언어 */
+/* 11개 언어 */
 .mo-langs { width: 340px; }
 .mo-chiprow { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
 .mo-chip { position: relative; display: inline-flex; align-items: center; height: 30px; padding: 0 12px; border-radius: 15px; background: #F5F5F7; font-size: 13px; font-weight: 500; white-space: nowrap; }

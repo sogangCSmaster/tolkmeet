@@ -22,7 +22,7 @@ export const en = {
 
   metaTitle: 'Tolkmeet: Video meetings with live translated captions',
   metaDescription:
-    'Video meetings where what you say appears as captions in each listener’s language as you speak. 9 languages, including English, Japanese and Korean. Guests join from a link.',
+    'Video meetings where what you say appears as captions in each listener’s language as you speak. 11 languages, including English, Japanese and Korean. Guests join from a link.',
 
   skipToContent: 'Skip to content',
   navLabel: 'Main',
@@ -42,7 +42,7 @@ export const en = {
 
   heroTitle1: 'Speak your own language.',
   heroTitle2: 'Share one conversation.',
-  heroLead: 'The moment you speak, captions appear on the other person’s screen in their language. Nine languages, including English, Japanese and Korean.',
+  heroLead: 'The moment you speak, captions appear on the other person’s screen in their language. 11 languages, including English, Japanese and Korean.',
   heroSecondary: 'See an example meeting',
   heroPrice: 'Basic from $19 a month, with 8 hours of translated meetings. Need it just once? A day pass is $12.',
   poweredBy: 'Powered by',
@@ -131,7 +131,7 @@ export const en = {
   detailsTitle: 'What matters in a meeting.',
   // 카드마다 짧은 움직임 장면이 있다(scene: 장면 이름, desc: 장면이 보여 주는 것 한 문장. 대화 상자의 설명이 된다).
   details: [
-    { scene: 'lang', title: '9 languages', body: 'Korean, Japanese, English, Chinese (Simplified), Spanish, French, German, Vietnamese and Thai. Each person picks their own.', desc: 'Open the language menu, pick 日本語, and your captions switch to Japanese.' },
+    { scene: 'lang', title: '11 languages', body: 'Korean, Japanese, English, Chinese (Simplified), Spanish, French, German, Swiss German, Italian, Vietnamese and Thai. Each person picks their own.', desc: 'Open the language menu, pick 日本語, and your captions switch to Japanese.' },
     { scene: 'join', title: 'No sign-up', body: 'Guests open the link and ask to join. That’s it. No app to install, either.', desc: 'Copy the meeting link, then admit the guest when they ask to join. They don’t need an account.' },
     { scene: 'accent', title: 'Any accent', body: 'Japanese spoken with a Korean accent is still written down as Japanese.', desc: 'Minjun speaks Japanese with a Korean accent. It is written down as Japanese, and the translation appears while he is still speaking.' },
     { scene: 'txt', title: 'Save as .txt', body: 'Each person can keep the conversation, original and translation, as a file.', desc: 'One click saves the conversation, original and translation, as a text file on your device.' },
@@ -196,7 +196,7 @@ export const en = {
     { item: 'day', name: 'Day pass', price: '$12', unit: ' /24 hours', note: 'Up to 3 hours of translated meetings within 24 hours · One payment, no subscription', cta: 'Get a day pass' },
   ],
   // 요금 아래에는 모든 요금제에 공통인 한 줄만 둔다. 추가 시간·일일권·환불은 아래 자주 묻는 질문에서 답한다.
-  pricingFine: 'Every plan includes all three ways to meet, nine languages and saved captions. Prices in US dollars, plus tax where applicable.',
+  pricingFine: 'Every plan includes all three ways to meet, 11 languages and saved captions. Prices in US dollars, plus tax where applicable.',
 
   faqTitle: 'Questions.',
   faq: [
