@@ -1,0 +1,10 @@
+[
+  {"fromPort": 22, "toPort": 22, "protocol": "tcp", "cidrs": ["@SSH_CIDR@"]},
+  {"fromPort": 80, "toPort": 80, "protocol": "tcp", "cidrs": ["0.0.0.0/0"], "ipv6Cidrs": ["::/0"]},
+  {"fromPort": 443, "toPort": 443, "protocol": "tcp", "cidrs": ["0.0.0.0/0"], "ipv6Cidrs": ["::/0"]},
+  {"fromPort": 443, "toPort": 443, "protocol": "udp", "cidrs": ["0.0.0.0/0"], "ipv6Cidrs": ["::/0"]},
+  {"fromPort": 3478, "toPort": 3478, "protocol": "tcp", "cidrs": ["0.0.0.0/0"], "ipv6Cidrs": ["::/0"]},
+  {"fromPort": 3478, "toPort": 3478, "protocol": "udp", "cidrs": ["0.0.0.0/0"], "ipv6Cidrs": ["::/0"]},
+  {"fromPort": 5349, "toPort": 5349, "protocol": "tcp", "cidrs": ["0.0.0.0/0"], "ipv6Cidrs": ["::/0"]},
+  {"fromPort": 49152, "toPort": 65535, "protocol": "udp", "cidrs": ["0.0.0.0/0"], "ipv6Cidrs": ["::/0"]}
+]

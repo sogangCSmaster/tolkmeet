@@ -30,7 +30,7 @@ The Gemini key belongs in the server environment or the repository root `.env`. 
 | `web/` | React + Vite + TypeScript — home, lobby, meeting room, caption panel |
 | `site/` | Astro — the landing page (tolkmeet.com), static HTML in English, Korean and Japanese, for GitHub Pages |
 | `design/` | Design tokens (`tokens.css`), rules, static preview |
-| `docs/ARCHITECTURE.md` | Architecture and deployment (EC2) plan |
+| `docs/ARCHITECTURE.md` | Architecture and deployment plan (deployed on Lightsail, see Deployment) |
 
 ## Local development
 
@@ -130,6 +130,21 @@ node web/tests/browser-stt.mjs speech.wav --lang ko --partner ja
 It calls Gemini for real, so it is not part of CI. `CHROMIUM_PATH` picks a different Chromium build.
 
 These scripts check waiting-room disconnects, failed admissions, mobile caption controls, mute preservation and capture cleanup, plus real WebRTC connections with and without local devices. Signaling and the screen picker are mocked. `TEST_ORIGIN` overrides the default `http://127.0.0.1:5173`.
+
+## Deployment
+
+The app runs on one AWS Lightsail server (Seoul, Ubuntu 24.04, `meet.tolkmeet.com`). It is deployed from your own computer with the scripts in `deploy/`. GitHub Actions deploys only the landing page (`site/` → GitHub Pages), never the app.
+
+| Script | What it does |
+|---|---|
+| `deploy/provision.sh` | Sets up the server: Caddy (HTTPS, HTTP/3), coturn, Litestream, systemd units, health checks, swap, watchdog, automatic security updates. Safe to run again. |
+| `deploy/secrets.sh` | Sends secrets from 1Password straight to `/etc/tolkmeet/secrets.env` (`op inject`; values are never printed). |
+| `deploy/deploy.sh` | Cross-builds the server (`cargo zigbuild`, x86_64 Linux) and the web app, uploads them as a new release and restarts. If `/api/health` does not answer within 30 s it switches back to the previous release. `deploy/deploy.sh rollback` goes back one release. |
+| `deploy/restore-from-snapshot.sh` | When the whole server is lost: new instance from the latest daily snapshot, firewall from `deploy/firewall.json`, static IP moved, database restored from the S3 backup. |
+
+Needs: `aws login --profile tolkmeet`, the 1Password CLI signed in to the personal account, the `tolkmeet-deploy` SSH key in 1Password, `zig` + `cargo-zigbuild`.
+
+Recovery on the server: every service restarts after 1 s with no retry limit; a timer restarts the app after 3 failed health checks in a row; the systemd watchdog (softdog) and `kernel.panic=10` reboot a hung machine; the database is replicated to S3 by Litestream (backups kept 24 h, matching the privacy policy).
 
 ## License
 

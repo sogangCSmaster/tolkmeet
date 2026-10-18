@@ -1,0 +1,46 @@
+[Unit]
+Description=Tolkmeet app server
+After=network-online.target
+Wants=network-online.target
+# 몇 번을 죽어도 다시 띄운다(재시작 횟수 제한 없음).
+StartLimitIntervalSec=0
+
+[Service]
+User=tolkmeet
+Group=tolkmeet
+ExecStart=/opt/tolkmeet/current/tolkmeet-server
+EnvironmentFile=/etc/tolkmeet/app.env
+EnvironmentFile=/etc/tolkmeet/secrets.env
+EnvironmentFile=/etc/tolkmeet/turn.env
+Restart=always
+RestartSec=1
+# 서버는 Ctrl-C(SIGINT)로 정상 종료한다.
+KillSignal=SIGINT
+TimeoutStopSec=15
+StateDirectory=tolkmeet
+StateDirectoryMode=0700
+UMask=0077
+LimitNOFILE=65536
+OOMScoreAdjust=-500
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

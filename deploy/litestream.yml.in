@@ -1,0 +1,12 @@
+# DB를 S3로 계속 복제한다(Litestream 0.5). 처리방침대로 백업 사본은 하루 안에 지워지도록 보관 기간을 24시간으로 둔다.
+snapshot:
+  interval: 6h
+  retention: 24h
+
+dbs:
+  - path: /var/lib/tolkmeet/tolkmeet.db
+    replica:
+      type: s3
+      bucket: @BUCKET@
+      path: tolkmeet
+      region: ap-northeast-2

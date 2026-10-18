@@ -1,0 +1,6 @@
+[Unit]
+Description=Tolkmeet health check
+
+[Service]
+Type=oneshot
+ExecStart=/opt/tolkmeet/bin/tolkmeet-health

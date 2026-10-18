@@ -206,6 +206,8 @@ STT 비용(전체의 약 75%)은 **보낸 오디오 길이**에 비례한다. �
 
 ### EC2 MVP 구성 (1대)
 
+> **실제 배포(2026-10-18)는 Lightsail micro 1대**(서울, Ubuntu 24.04, x86_64)로 했다. 아래 표와 다른 점: 인스턴스는 x86_64(`cargo zigbuild`로 크로스빌드), 고정 IP는 Lightsail static IP, SSH는 운영자 IP에서만 연 방화벽, 비밀정보는 1Password에서 서버의 `/etc/tolkmeet/secrets.env`로 바로 보낸다(`deploy/secrets.sh`), 배포는 운영자 컴퓨터에서 `deploy/deploy.sh`(GitHub Actions로 앱을 배포하지 않는다). TURN은 지금 3478/udp·tcp만 쓴다(5349 TLS는 아직). 자세한 것은 README의 Deployment와 `deploy/`.
+
 | 구성 | 내용 |
 |---|---|
 | 리전 | `ap-northeast-2` (서울) |

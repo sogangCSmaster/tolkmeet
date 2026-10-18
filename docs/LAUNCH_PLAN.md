@@ -8,7 +8,7 @@
 |---|---|---|---|
 | `tolkmeet.com` | 소개 페이지(SEO), 요금, 약관, FAQ. 정적 HTML | **GitHub Pages**(무료, HTTPS 자동) | 색인함 |
 | `www.tolkmeet.com` | `tolkmeet.com`으로 이동(Pages가 자동 처리) | GitHub Pages | — |
-| `meet.tolkmeet.com` | 지금 앱 그대로(로그인·회의·대면·자막 화면). 회의 링크는 `meet.tolkmeet.com/abcd-efgh-ijkm` | **AWS EC2**(Caddy + Rust 서버 + coturn) | `noindex` + `robots.txt` 전부 막음 |
+| `meet.tolkmeet.com` | 지금 앱 그대로(로그인·회의·대면·자막 화면). 회의 링크는 `meet.tolkmeet.com/abcd-efgh-ijkm` | **AWS Lightsail**(Caddy + Rust 서버 + coturn) | `noindex` + `robots.txt` 전부 막음 |
 
 **나누는 이유**
 - 소개 페이지는 검색 엔진이 읽을 수 있는 정적 HTML이어야 한다. 지금 앱은 React SPA라 첫 응답이 빈 `<div id="root">`다. 소개 페이지를 앱 안에 두면 SSR·프리렌더를 앱에 붙여야 하고, 그만큼 앱이 무거워진다.
@@ -21,7 +21,7 @@
 **속도**: 소개 페이지는 JS 없는 정적 HTML이라 첫 화면이 가장 빠르다(Pages는 Fastly CDN). 앱에는 영향이 없다.
 
 **GitHub Pages로 두는 것**(결정, 2026-10-17)
-- 서버비 0, 소개 페이지 트래픽이 몰려도 EC2에 부담이 없다. 레포가 공개(AGPL)라 무료로 쓸 수 있다.
+- 서버비 0, 소개 페이지 트래픽이 몰려도 앱 서버에 부담이 없다. 레포가 공개(AGPL)라 무료로 쓸 수 있다.
 - 배포: `site/`가 바뀌면 GitHub Actions가 빌드해 Pages에 올린다. 사용자 지정 도메인은 DNS에 GitHub Pages IP(A·AAAA)와 `www` CNAME, 레포 설정에서 HTTPS 강제.
 - 한계: 응답 헤더(CSP·캐시 기간)를 직접 정할 수 없다. 정적 소개 페이지라 큰 문제는 아니다(CSP는 `<meta>`로). 월 대역폭 약 100GB(권장치)라 이미지는 가볍게.
 - 앱(`meet.`)과 주소가 달라 쿠키·로그인이 섞이지 않는다. "로그인"·"시작하기" 버튼은 `meet.tolkmeet.com/login`, `/signup`으로 보낸다.
@@ -39,13 +39,13 @@ docs/
 ```
 
 - `web/`과 `site/`는 각자 `package.json`·잠금 파일을 가진 독립 프로젝트로 둔다(작업 공간으로 묶으면 지금의 `pnpm --dir web` 명령·스크립트가 바뀌는데 얻는 것이 적다). 공용 디자인은 `design/tokens.css`를 두 곳이 가져다 쓴다(`site/`는 CSS `@import`로). 브랜드 마크와 데모 얼굴은 작은 SVG라 각 프로젝트에 같은 그림을 두고, 바꿀 때 둘 다 고친다.
-- **GitHub Actions로 배포하는 것은 랜딩페이지(`site/**` → GitHub Pages)뿐이다.** 공개 저장소이므로 앱(`server/**`·`web/**`)의 배포 비밀정보(SSH 키·API 키)를 CI에 두지 않는다. 앱은 운영자가 자기 컴퓨터에서 배포 스크립트로 EC2에 올린다.
+- **GitHub Actions로 배포하는 것은 랜딩페이지(`site/**` → GitHub Pages)뿐이다.** 공개 저장소이므로 앱(`server/**`·`web/**`)의 배포 비밀정보(SSH 키·API 키)를 CI에 두지 않는다. 앱은 운영자가 자기 컴퓨터에서 배포 스크립트(`deploy/deploy.sh`)로 Lightsail 서버에 올린다.
 
 ## 2. 회원가입·로그인
 
 지금은 운영자가 `HOST_ACCOUNTS` 환경 변수에 해시를 넣는 방식이고, 세션은 서버 메모리에 있다. 바꿀 점:
 
-- **저장소: SQLite, 서버 프로세스 안에** (`rusqlite`, WAL 모드, 같은 EC2의 로컬 디스크 파일). 네트워크 왕복이 없어 조회가 마이크로초 단위이고, 따로 운영할 DB 서버도 없다. 표: `users`, `sessions`, `email_tokens`, `subscriptions`, `usage`. 서버 재시작에도 로그인이 유지된다.
+- **저장소: SQLite, 서버 프로세스 안에** (`rusqlite`, WAL 모드, 같은 서버의 로컬 디스크 파일). 네트워크 왕복이 없어 조회가 마이크로초 단위이고, 따로 운영할 DB 서버도 없다. 표: `users`, `sessions`, `email_tokens`, `subscriptions`, `usage`. 서버 재시작에도 로그인이 유지된다.
   - 쓰기는 한 번에 하나라 연결 하나를 전용 스레드(또는 `spawn_blocking`)에 두고, 비동기 작업이 DB를 기다리며 잠금을 쥐지 않게 한다(서버는 잠금을 쥔 채 await하지 않는다는 규칙 그대로).
   - Paddle 동의 철회: privacy@로 요청을 받으면 `UPDATE users SET paddle_consent_withdrawn_at = unixepoch() WHERE email = '…'`로 기록한다(초 단위). 그 뒤 요금제를 바꾸려면 결제 화면에서 두 동의를 다시 체크해야 하고, 새 결제도 매번 동의를 받으므로 그때 철회 기록이 지워진다.
   - 백업: 한 대에 모든 데이터가 있으므로 **Litestream으로 S3에 연속 복제**한다(초 단위 지연, 인스턴스가 사라져도 복구). 앱 성능에는 영향이 없다.
@@ -97,7 +97,9 @@ Paddle은 **판매 대행자(Merchant of Record)**다. 나라별 부가세·영�
   - 계정마다 월 한도를 넘으면 음성 인식 토큰을 내주지 않는다(서버에서 강제).
   - **전체 하루 지출 상한**: 서버가 오늘 쓴 Gemini 토큰을 합산해 운영자가 정한 금액을 넘으면 새 토큰 발급을 멈추고 운영자에게 알린다(차단기). 버그나 남용이 있어도 손실이 하루 상한을 넘지 않는다.
   - Google Cloud 결제 예산 알림(50·90·100%).
-- 고정비: EC2 한 대(t4g.small 기준 월 $15 안팎) + 트래픽. TURN 중계로 영상이 서버를 지나가는 회의는 시간당 약 1GB 남짓의 전송 비용(약 $0.1)이 더 든다(P2P가 되는 회의는 0).
+- 고정비: Lightsail micro 한 대(월 $7, 공인 IPv4·전송량 2TB 포함) + Cloudflare Workers 유료($5, 메일 발송) + 도메인.
+  - **서버 결정(2026-10-18)**: EC2 t4g.small(디스크·IPv4 포함 월 약 $19.7) 대신 Lightsail micro(1GB, 월 $7). 실행 파일 하나 + SQLite라 1GB로 넉넉하고(운영 중 약 330MB), 전송량이 묶여 있어 TURN 중계에 유리하다. Lightsail에는 인스턴스 역할이 없어 S3 백업은 버킷 하나에만 쓸 수 있는 키를 서버에 둔다. 하드웨어 장애 자동 이전(EC2 auto recovery)은 없으므로 상태 점검 알림 + 매일 자동 스냅샷 + `deploy/restore-from-snapshot.sh`로 대비한다.
+  - 트래픽: TURN 중계로 영상이 서버를 지나가는 회의는 시간당 약 1GB 남짓을 쓴다(P2P가 되는 회의는 0). Lightsail 포함 전송량 2TB 안에서는 추가 비용이 없다.
 
 초안(측정한 원가로 다시 맞춘다). **월 구독만**, 사용자 수 과금과 연간 결제는 없다(계정 하나가 요금제 하나):
 
@@ -183,7 +185,7 @@ Paddle은 **판매 대행자(Merchant of Record)**다. 나라별 부가세·영�
 
 ## 7. 순서
 
-1. 도메인 구입, DNS(Route 53 또는 Cloudflare): apex·`www` → GitHub Pages, `meet.` → EC2 Elastic IP, 메일용 SPF·DKIM·DMARC.
+1. 도메인 구입, DNS(Route 53 또는 Cloudflare): apex·`www` → GitHub Pages, `meet.` → Lightsail 고정 IP(DNS only), 메일용 SPF·DKIM·DMARC.
 2. SQLite + 회원가입·로그인(Google, 이메일).
 3. 사용량 측정(번역 시간·Gemini 토큰)과 요금제 한도.
 4. 소개 페이지 + 요금·약관·환불 페이지(영·한·일).

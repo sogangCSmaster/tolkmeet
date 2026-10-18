@@ -1,0 +1,43 @@
+# meet.tolkmeet.com: 앱(정적 파일)과 API·WebSocket을 한 주소로. 인증서는 Caddy가 자동으로 받는다(DNS는 프록시 끔).
+{
+	servers {
+		protocols h1 h2 h3
+	}
+}
+
+meet.tolkmeet.com {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		Permissions-Policy `camera=(self), microphone=(self), display-capture=(self), geolocation=(), payment=(self "https://buy.paddle.com" "https://sandbox-buy.paddle.com")`
+		-Server
+	}
+
+	# 서버가 X-Forwarded-For를 마지막 단(Caddy)만 믿도록 TRUSTED_PROXY=1로 띄운다.
+	@backend path /api/* /ws
+	handle @backend {
+		reverse_proxy 127.0.0.1:8080
+	}
+
+	handle {
+		root * /opt/tolkmeet/current/web
+		# 이름에 해시가 붙은 파일은 바뀌지 않으므로 오래 저장하고, 나머지(index.html 등)는 매번 확인하게 해 배포 직후 옛 화면이 남지 않게 한다.
+		@hashed path /assets/*
+		header @hashed Cache-Control "public, max-age=31536000, immutable"
+		@other not path /assets/*
+		header @other Cache-Control "no-cache"
+		try_files {path} /index.html
+		file_server
+	}
+
+	log {
+		output file /var/log/caddy/meet.log {
+			roll_size 20MiB
+			roll_keep 3
+		}
+	}
+}

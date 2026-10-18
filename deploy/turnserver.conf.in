@@ -1,0 +1,40 @@
+# coturn(영상 중계). 서버 설치 스크립트가 @TURN_SECRET@를 /etc/tolkmeet/turn.env의 값으로 바꿔 /etc/turnserver.conf에 쓴다.
+listening-port=3478
+external-ip=3.39.109.1/172.26.14.178
+min-port=49152
+max-port=65535
+realm=meet.tolkmeet.com
+server-name=meet.tolkmeet.com
+# 앱이 참가자마다 시간제한 자격을 만든다(ice.rs, TURN REST 방식).
+use-auth-secret
+static-auth-secret=@TURN_SECRET@
+fingerprint
+no-cli
+# TLS(5349)는 아직 쓰지 않는다(인증서 연결 전). UDP·TCP 3478만.
+no-tls
+no-dtls
+no-multicast-peers
+# 중계로 서버 내부·사설망·클라우드 메타데이터(169.254.169.254)에 닿지 못하게 막는다.
+denied-peer-ip=0.0.0.0-0.255.255.255
+denied-peer-ip=10.0.0.0-10.255.255.255
+denied-peer-ip=100.64.0.0-100.127.255.255
+denied-peer-ip=127.0.0.0-127.255.255.255
+denied-peer-ip=169.254.0.0-169.254.255.255
+denied-peer-ip=172.16.0.0-172.31.255.255
+denied-peer-ip=192.0.0.0-192.0.0.255
+denied-peer-ip=192.0.2.0-192.0.2.255
+denied-peer-ip=192.168.0.0-192.168.255.255
+denied-peer-ip=198.18.0.0-198.19.255.255
+denied-peer-ip=198.51.100.0-198.51.100.255
+denied-peer-ip=203.0.113.0-203.0.113.255
+denied-peer-ip=224.0.0.0-255.255.255.255
+denied-peer-ip=::1
+denied-peer-ip=64:ff9b::-64:ff9b::ffff:ffff
+denied-peer-ip=fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+# 한 사람·서버 전체 동시 중계 수(1GB 서버 기준)
+user-quota=12
+total-quota=400
+stale-nonce=600
+syslog
+simple-log
