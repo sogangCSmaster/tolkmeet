@@ -122,7 +122,13 @@ function HostHome({ user }: { user: User }) {
       const now = Date.now() / 1000
       setMeetings({ ...r.data, upcoming: r.data.upcoming.filter((m) => (m.startsAt ?? 0) + m.durationMin * 60 > now) })
     })
-    if (user.plan !== 'none') void api.get<Billing>('/api/billing').then((r) => alive && r.ok && setBilling(r.data))
+    if (user.plan !== 'none')
+      void api.get<Billing>('/api/billing').then((r) => {
+        if (!alive || !r.ok) return
+        setBilling(r.data)
+        // 화면을 연 사이 일일권이 끝났다: 계정 정보를 다시 받아 요금제 고르기 화면으로 바꾼다.
+        if (r.data.plan === 'none') void refreshAuth()
+      })
     return () => {
       alive = false
     }
@@ -282,7 +288,7 @@ function HostHome({ user }: { user: User }) {
               </InLink>
             </section>
           ) : (
-            billing && <UsageRing billing={billing} />
+            billing && billing.plan !== 'none' && <UsageRing billing={billing} />
           )}
           <section className="device-card" aria-labelledby="device-title">
             <h2 id="device-title">{t('home.onThisDevice')}</h2>
@@ -351,8 +357,14 @@ function HostHome({ user }: { user: User }) {
 /** 이번 결제 기간의 번역 시간: 남은 비율 고리 + 남은 시간 + 다시 채워지는 날 */
 function UsageRing({ billing }: { billing: Billing }) {
   const { t, locale } = useI18n()
+  const day = billing.plan === 'day'
   const total = billing.includedSec + billing.extraSec
-  const usedPct = total > 0 ? Math.min(100, Math.round((billing.usedSec / Math.max(billing.includedSec, 1)) * 100)) : 0
+  // 일일권은 한 장(3시간) 기준으로 쓴 비율을 보인다(남은 시간이 더 많으면 0%).
+  const usedPct = day
+    ? Math.max(0, 100 - Math.round((billing.daySec / (3 * 3600)) * 100))
+    : total > 0
+      ? Math.min(100, Math.round((billing.usedSec / Math.max(billing.includedSec, 1)) * 100))
+      : 0
   const r = 44
   const c = 2 * Math.PI * r
   return (
@@ -366,14 +378,16 @@ function UsageRing({ billing }: { billing: Billing }) {
       </svg>
       <div>
         <p className="usage-label" id="usage-title">
-          {t('home.thisPeriod')}
+          {day ? t('plan.dayPass') : t('home.thisPeriod')}
         </p>
         <p className="usage-left">{t('home.left', { time: formatDuration(billing.remainingSec, t) })}</p>
         <p className="muted">
-          {billing.plan === 'pro' ? 'Pro' : 'Basic'} · {t('account.resetsOn', { date: formatDate(billing.resetsAt, locale) })}
+          {day
+            ? billing.dayUntil != null && t('plan.dayUntil', { date: formatDateTime(billing.dayUntil, locale) })
+            : `${billing.plan === 'pro' ? 'Pro' : 'Basic'} · ${t('account.resetsOn', { date: formatDate(billing.resetsAt, locale) })}`}
         </p>
-        <InLink to="/checkout?item=hours" className="auth-link">
-          {t('account.addHours')}
+        <InLink to={day ? '/checkout?item=basic' : '/checkout?item=hours'} className="auth-link">
+          {t(day ? 'plan.subscribe' : 'account.addHours')}
         </InLink>
         {billing.pastDue && <UnpaidNotice />}
       </div>

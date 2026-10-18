@@ -40,3 +40,6 @@ bench/gemini/results/
 # 소개 페이지(site/) 빌드 결과
 site/dist/
 site/.astro/
+
+# 가격 정책·원가 분석 (공개하지 않음)
+docs/private/

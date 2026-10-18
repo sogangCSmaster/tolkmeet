@@ -42,7 +42,7 @@ export const en = {
   heroTitle2: 'Share one conversation.',
   heroLead: 'The moment you speak, captions appear on the other person’s screen in their language. Nine languages, including English, Japanese and Korean.',
   heroSecondary: 'See an example meeting',
-  heroPrice: 'Basic from $19 a month, with 10 hours of translated meetings.',
+  heroPrice: 'Basic from $19 a month, with 8 hours of translated meetings. Need it just once? A day pass is $12.',
   poweredBy: 'Powered by',
 
   // 회의 예시(앱의 회의 화면과 같은 모양): 상대 타일, 내 타일, 대화 기록
@@ -167,10 +167,11 @@ export const en = {
   pricingTitle: 'Pricing.',
   pricingLead: 'Choose by the hours of translated meetings you need each month. Guests are always free.',
   plans: [
-    { name: 'Basic', price: '$19', unit: ' /month', note: '10 hours of translated meetings every month · Cancel anytime', cta: 'Start with Basic' },
-    { name: 'Pro', price: '$39', unit: ' /month', note: '30 hours of translated meetings every month · Cancel anytime', cta: 'Start with Pro' },
+    { item: 'basic', name: 'Basic', price: '$19', unit: ' /month', note: '8 hours of translated meetings every month · Cancel anytime', cta: 'Start with Basic' },
+    { item: 'pro', name: 'Pro', price: '$49', unit: ' /month', note: '20 hours of translated meetings every month · Cancel anytime', cta: 'Start with Pro' },
+    { item: 'day', name: 'Day pass', price: '$12', unit: ' /24 hours', note: 'Up to 3 hours of translated meetings within 24 hours · One payment, no subscription', cta: 'Get a day pass' },
   ],
-  pricingFine: 'Every plan: all three ways to meet, nine languages and saved captions. Add hours at $3 each in a busy month. US dollars, plus tax where applicable.',
+  pricingFine: 'Every plan: all three ways to meet, nine languages and saved captions. Subscribers can add hours at $3 each in a busy month. US dollars, plus tax where applicable.',
 
   faqTitle: 'Questions.',
   faq: [
@@ -178,7 +179,7 @@ export const en = {
     { q: 'How many people can join a meeting?', a: 'Up to four. Each person can speak a different language.' },
     { q: 'Can it replace a professional interpreter?', a: 'For everyday business conversation it works well. For contracts, medical or legal decisions, confirm the important points with a qualified interpreter.' },
     { q: 'What happens to my voice?', a: 'Your speech is sent to Google Gemini through its paid API to be turned into text and translated. Google does not use paid API data to train its models, and Tolkmeet does not store audio or captions.' },
-    { q: 'What if I use up my hours?', a: 'Add hours for $3 each. Extra hours stay on your account until you use them. Or move to Pro for 30 hours a month.' },
+    { q: 'What if I use up my hours?', a: 'Add hours for $3 each. Extra hours stay on your account until you use them. Or move to Pro for 20 hours a month. On a day pass, buy another one or subscribe.' },
   ],
 
   closingTitle1: 'Your next meeting,',

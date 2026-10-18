@@ -3,6 +3,7 @@ import { api, createRoom, openPortal, type Billing, type Plan, type User } from 
 import { features, refreshAuth, setUser } from '../lib/auth'
 import { useI18n, type MessageKey } from '../lib/i18n'
 import '../lib/i18nPages'
+import { formatDateTime } from '../lib/format'
 import { legalUrl } from '../lib/links'
 import { navigate, queryParam, useHostOnly } from '../lib/router'
 import { BrandMark } from './BrandMark'
@@ -10,7 +11,7 @@ import { Header } from './Header'
 import { Icon } from './Icon'
 import { Rich } from './Rich'
 
-type Item = 'basic' | 'pro' | 'hours'
+type Item = 'basic' | 'pro' | 'hours' | 'day'
 
 type CheckoutData = {
   clientToken: string
@@ -58,7 +59,8 @@ function isDark(): boolean {
   return chosen ? chosen === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches
 }
 
-const PRICE: Record<Exclude<Item, 'hours'>, string> = { basic: '$19', pro: '$39' }
+// 서버 dev_activate의 영수증 금액·소개 페이지 요금표와 같다. 바꿀 때 함께 바꾼다.
+const PRICE: Record<Exclude<Item, 'hours'>, string> = { basic: '$19', pro: '$49', day: '$12' }
 const HOURS = [1, 5, 10]
 /** 서버가 한 번에 받는 시간 추가 수량(meetings.rs checkout) */
 const MAX_HOURS = 100
@@ -103,7 +105,7 @@ export function Checkout() {
   const auth = useHostOnly('/signup')
   const [item, setItem] = useState<Item>(() => {
     const q = queryParam('item') ?? queryParam('plan')
-    return q === 'pro' || q === 'hours' ? q : 'basic'
+    return q === 'pro' || q === 'hours' || q === 'day' ? q : 'basic'
   })
   const [qty, setQty] = useState(() => {
     const q = Number(queryParam('q'))
@@ -119,11 +121,14 @@ export function Checkout() {
 
   if (auth.status !== 'host') return <div className="shell" />
   const user = auth.user
-  // 요금제가 없으면 시간 추가는 살 수 없다(구독부터).
-  const sel: Item = item === 'hours' && user.plan === 'none' ? 'basic' : item
+  // 구독 중인지(일일권만 남은 사람은 구독이 없다).
+  const subscribed = user.plan === 'basic' || user.plan === 'pro'
+  // 시간 추가는 구독자만, 일일권은 구독하지 않은 사람만 산다. 맞지 않으면 Basic을 보인다.
+  const sel: Item = (item === 'hours' && !subscribed) || (item === 'day' && subscribed) ? 'basic' : item
+  const isPlan = sel === 'basic' || sel === 'pro'
   // 이미 구독 중이면 다른 요금제는 "바꾸기"로 처리한다(올리면 남은 기간의 차액만 바로 청구, 내리면 청구·환불 없이 다음 결제부터 낮은 요금).
-  const changing = sel !== 'hours' && user.plan !== 'none' && user.plan !== sel
-  const same = sel !== 'hours' && user.plan === sel
+  const changing = isPlan && subscribed && user.plan !== sel
+  const same = isPlan && user.plan === sel
 
   async function pay() {
     setBusy(true)
@@ -216,7 +221,9 @@ export function Checkout() {
           <h1 id="checkout-title">
             {changing
               ? t('checkout.change', { plan: sel === 'pro' ? 'Pro' : 'Basic' })
-              : t(sel === 'hours' ? 'checkout.hoursTitle' : sel === 'pro' ? 'checkout.proTitle' : 'checkout.basicTitle')}
+              : t(
+                  sel === 'hours' ? 'checkout.hoursTitle' : sel === 'day' ? 'checkout.dayTitle' : sel === 'pro' ? 'checkout.proTitle' : 'checkout.basicTitle',
+                )}
           </h1>
           <div className="choice-grid" role="radiogroup" aria-label={t('account.plan')}>
             {(['basic', 'pro'] as const).map((p) => (
@@ -232,7 +239,20 @@ export function Checkout() {
                 <small>{t(p === 'pro' ? 'checkout.proHours' : 'checkout.basicHours')}</small>
               </button>
             ))}
-            {user.plan !== 'none' && (
+            {!subscribed && (
+              <button type="button" role="radio" aria-checked={sel === 'day'} className={`choice${sel === 'day' ? ' on' : ''}`} onClick={() => { setItem('day'); setError(null) }}>
+                <span className="choice-top">
+                  {t('plan.dayPass')}
+                  {user.plan === 'day' && <span className="badge-soft">{t('checkout.current')}</span>}
+                </span>
+                <b>
+                  {PRICE.day}
+                  <small> / {t('checkout.dayUnit')}</small>
+                </b>
+                <small>{t('checkout.dayNote')}</small>
+              </button>
+            )}
+            {subscribed && (
               <button type="button" role="radio" aria-checked={sel === 'hours'} className={`choice${sel === 'hours' ? ' on' : ''}`} onClick={() => { setItem('hours'); setError(null) }}>
                 <span className="choice-top">{t('account.addHours')}</span>
                 <b>
@@ -253,13 +273,15 @@ export function Checkout() {
             </div>
           )}
           <ul className="ticks">
-            <li>{t(sel === 'pro' ? 'checkout.proHours' : sel === 'basic' ? 'checkout.basicHours' : 'checkout.hoursKeep')}</li>
+            <li>
+              {t(sel === 'pro' ? 'checkout.proHours' : sel === 'basic' ? 'checkout.basicHours' : sel === 'day' ? 'checkout.dayHours' : 'checkout.hoursKeep')}
+            </li>
             <li>{t('checkout.allModes')}</li>
             <li>{t('checkout.guestsFree')}</li>
-            <li>{t('checkout.extra')}</li>
+            <li>{t(sel === 'day' ? 'checkout.dayNote' : 'checkout.extra')}</li>
           </ul>
           <p className="fine">
-            {t('checkout.fine')}{' '}
+            {t(sel === 'day' ? 'checkout.dayFine' : 'checkout.fine')}{' '}
             <a href={legalUrl('refund', locale)} target="_blank" rel="noreferrer">
               {t('checkout.refund')}
             </a>
@@ -272,7 +294,13 @@ export function Checkout() {
             <span title={user.email}>{user.email}</span>
           </div>
           <div className="pay-line">
-            <span>{sel === 'hours' ? t('checkout.hours', { n: String(qty) }) : `${sel === 'pro' ? 'Pro' : 'Basic'} · ${t('account.monthly')}`}</span>
+            <span>
+              {sel === 'hours'
+                ? t('checkout.hours', { n: String(qty) })
+                : sel === 'day'
+                  ? `${t('plan.dayPass')} · ${t('checkout.dayUnit')}`
+                  : `${sel === 'pro' ? 'Pro' : 'Basic'} · ${t('account.monthly')}`}
+            </span>
             <span>{priceLabel}</span>
           </div>
           {changing ? (
@@ -357,12 +385,12 @@ export function Checkout() {
 }
 
 export function PaidDone() {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   // 결제는 로그인한 주최자만 하므로, 손님이면 로그인 뒤 이 화면으로 돌아오게 한다.
   const auth = useHostOnly('/login')
   // 주소는 누구나 고칠 수 있으므로 아는 값만 믿는다. 모르는 값이면 무엇을 샀는지 말하지 않는 화면을 보인다.
   const rawItem = queryParam('item')
-  const item: Item | null = rawItem === 'basic' || rawItem === 'pro' || rawItem === 'hours' ? rawItem : null
+  const item: Item | null = rawItem === 'basic' || rawItem === 'pro' || rawItem === 'hours' || rawItem === 'day' ? rawItem : null
   const q = Number(queryParam('q'))
   const hours = item === 'hours' && Number.isInteger(q) && q >= 1 && q <= MAX_HOURS ? q : null
   const [starting, setStarting] = useState(false)
@@ -379,11 +407,13 @@ export function PaidDone() {
   // 시간을 샀으면 결제 전 잔액(결제 화면이 남긴 값)보다 늘어야 들어온 것이다. 값이 없으면 잔액이 있는지로 본다.
   const [hoursBefore] = useState(() => (item === 'hours' ? readHoursBefore() : null))
   const [ready, setReady] = useState(false)
+  // 일일권: 들어오면 끝나는 때가 방금 산 때부터 24시간이 된다(이미 남은 일일권이 있어도 늘어난다).
+  const [dayUntil, setDayUntil] = useState<number | null>(null)
 
   // 결제 결과는 Paddle 웹훅으로 조금 늦게 들어올 수 있다. 요금제가 켜지거나 산 시간이 들어올 때까지 잠깐 다시 확인한다.
   useEffect(() => {
     // 요금제를 바꿨으면 15초쯤, 새로 산 요금제·시간은 30초쯤 기다린 뒤 멈추고 다시 확인할 수 있게 알린다.
-    const [interval, maxTries] = item === 'hours' ? [2000, 15] : bought ? [1500, 20] : [1500, 10]
+    const [interval, maxTries] = item === 'hours' || item === 'day' ? [2000, 15] : bought ? [1500, 20] : [1500, 10]
     let tries = 0
     let stop = false
     let timer = 0
@@ -394,6 +424,16 @@ export function PaidDone() {
         if (stop) return
         done = r.ok && (hoursBefore == null ? r.data.extraSec > 0 : r.data.extraSec > hoursBefore)
         if (done) clearHoursBefore()
+      } else if (item === 'day') {
+        // 끝나는 때가 지금부터 24시간 가까이 남았으면 이번 결제가 들어온 것이다(결제창을 연 뒤 10분까지 봐준다).
+        const r = await api.get<Billing>('/api/billing')
+        if (stop) return
+        const until = r.ok ? r.data.dayUntil : null
+        done = until != null && until >= Date.now() / 1000 + 86_400 - 600
+        if (done) {
+          setDayUntil(until)
+          void refreshAuth()
+        }
       } else {
         // 새로 산 요금제는 계정(머리글·버튼이 쓴다)과 이번 기간의 결제를 함께 본다. 병렬이라 기다림이 늘지 않는다.
         const [r, b] = await Promise.all([api.get<{ user: User | null }>('/api/me'), bought ? api.get<Billing>('/api/billing') : null])
@@ -434,12 +474,16 @@ export function PaidDone() {
     ? t('paid.title', { plan: plan === 'pro' ? 'Pro' : 'Basic' })
     : ready && hours
       ? t('paid.hoursTitle', { n: String(hours) })
-      : t('paid.receivedTitle')
+      : ready && item === 'day'
+        ? t('paid.dayTitle')
+        : t('paid.receivedTitle')
   const lead = planShown
     ? changed
       ? t(plan === 'pro' ? 'paid.upgradeLead' : 'paid.downgradeLead', { email: user.email })
-      : t('paid.lead', { email: user.email, hours: plan === 'pro' ? '30' : '10' })
-    : t(ready && item === 'hours' ? 'paid.hoursLead' : 'paid.receivedLead', { email: user.email })
+      : t('paid.lead', { email: user.email, hours: plan === 'pro' ? '20' : '8' })
+    : ready && item === 'day' && dayUntil != null
+      ? t('paid.dayLead', { email: user.email, until: formatDateTime(dayUntil, locale) })
+      : t(ready && item === 'hours' ? 'paid.hoursLead' : 'paid.receivedLead', { email: user.email })
   return (
     <div className="shell">
       <Header />
@@ -482,7 +526,7 @@ export function PaidDone() {
           </p>
         )}
         <div className="row status-actions">
-          <button className="btn btn-primary btn-lg" onClick={() => void start()} disabled={starting || (bought ? !ready : user.plan === 'none')}>
+          <button className="btn btn-primary btn-lg" onClick={() => void start()} disabled={starting || (bought || item === 'day' ? !ready : user.plan === 'none')}>
             {t(plan ? 'paid.firstMeeting' : 'home.startNow')}
           </button>
           <button className="btn btn-outline btn-lg" onClick={() => navigate('/')}>

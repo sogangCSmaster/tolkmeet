@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { api, openPortal, type Billing, type CaptionSize, type Theme, type User, type UserPrefs } from '../lib/api'
 import { features, logout, setUser, userName } from '../lib/auth'
-import { formatDate, formatDuration, relativeTime, deviceLabel } from '../lib/format'
+import { formatDate, formatDateTime, formatDuration, relativeTime, deviceLabel } from '../lib/format'
 import { useI18n, type MessageKey } from '../lib/i18n'
 import '../lib/i18nPages'
 import { LANGUAGES } from '../lib/languages'
@@ -83,7 +83,7 @@ function AccountShell({ user, active, title, children }: { user: User; active: S
     ['profile', 'account.profile', '/account#profile'],
     ['plan', 'account.plan', '/account#plan'],
     // 요금제가 없으면 사용량 칸이 없다.
-    ...(user.plan !== 'none' ? ([['usage', 'account.usage', '/account#usage']] as [Section, MessageKey, string][]) : []),
+    ...(user.plan === 'basic' || user.plan === 'pro' ? ([['usage', 'account.usage', '/account#usage']] as [Section, MessageKey, string][]) : []),
     ['prefs', 'account.prefs', '/account#prefs'],
     ['security', 'account.security', '/account/security'],
     ['data', 'account.data', '/account#data'],
@@ -396,7 +396,7 @@ function useBilling(): [Billing | null, () => void] {
   return [billing, () => setN((x) => x + 1)]
 }
 
-const PLAN_PRICE = { basic: '$19', pro: '$39' } as const
+const PLAN_PRICE = { basic: '$19', pro: '$49' } as const
 
 function PlanCard({ user }: { user: User }) {
   const { t, locale } = useI18n()
@@ -425,7 +425,21 @@ function PlanCard({ user }: { user: User }) {
   return (
     <>
       <Card id="plan" title={t('account.plan')}>
-        {plan === 'none' ? (
+        {plan === 'day' ? (
+          // 일일권만 남은 사람: 끝나는 때와 남은 시간, 구독으로 넘어가는 길.
+          <div className="plan-box">
+            <p className="plan-name">{t('plan.dayPass')}</p>
+            <p className="plan-meta">
+              {billing?.dayUntil != null && t('plan.dayUntil', { date: formatDateTime(billing.dayUntil, locale) })}
+              {billing && ` · ${t('home.left', { time: formatDuration(billing.remainingSec, t) })}`}
+            </p>
+            <div className="row">
+              <InLink to="/checkout?item=basic" className="btn btn-primary">
+                {t('plan.subscribe')}
+              </InLink>
+            </div>
+          </div>
+        ) : plan === 'none' ? (
           <div className="plan-empty">
             <p>{t('account.noPlan')}</p>
             <InLink to="/checkout" className="btn btn-primary">
@@ -482,7 +496,7 @@ function PlanCard({ user }: { user: User }) {
           </div>
         )}
       </Card>
-      {billing && plan !== 'none' && <UsageCard billing={billing} />}
+      {billing && (plan === 'basic' || plan === 'pro') && <UsageCard billing={billing} />}
     </>
   )
 }

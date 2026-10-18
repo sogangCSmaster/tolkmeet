@@ -1,6 +1,7 @@
 const JSON_HEADERS = { 'Content-Type': 'application/json' }
 
-export type Plan = 'none' | 'basic' | 'pro'
+/** 'day': 구독이 없고 남은 일일권이 있다(24시간짜리, 한 번 결제). */
+export type Plan = 'none' | 'basic' | 'pro' | 'day'
 export type Theme = 'system' | 'light' | 'dark'
 export type CaptionSize = 's' | 'm' | 'l'
 
@@ -64,6 +65,9 @@ export type Billing = {
   includedSec: number
   usedSec: number
   extraSec: number
+  /** 남은 일일권 시간과 끝나는 때(없거나 끝났으면 0·null) */
+  daySec: number
+  dayUntil: number | null
   remainingSec: number
   periodStart: number | null
   /** 이번 기간의 결제가 끝나 포함 시간을 받았는지. 첫 결제 직후 잠깐, 또는 갱신 결제가 밀리면 false(그동안 포함 시간은 0). */

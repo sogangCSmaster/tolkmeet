@@ -66,6 +66,9 @@ struct Usage {
     /// 이번 기간에 포함 시간에서 쓴 시간(사 둔 추가 시간으로 낸 몫은 빼고)
     used: i64,
     extra: i64,
+    /// 남은 일일권 시간(끝났으면 0)과 끝나는 때
+    day: i64,
+    day_until: Option<i64>,
     start: Option<i64>,
     end: Option<i64>,
     /// 이번 기간의 결제가 끝나 포함 시간을 받았는지(Paddle 구독이 아니면 언제나 true). 갱신 결제가 밀리면 false.
@@ -75,18 +78,26 @@ struct Usage {
 }
 
 fn usage_of(c: &rusqlite::Connection, uid: i64, now: i64) -> rusqlite::Result<Option<Usage>> {
-    type Row = (String, i64, Option<i64>, Option<i64>, i64, bool, bool, Option<i64>, Option<String>);
+    type Row = (String, i64, Option<i64>, Option<i64>, i64, bool, bool, Option<i64>, Option<String>, i64, Option<i64>);
     let row: Option<Row> = c
         .query_row(
             "SELECT plan, extra_seconds, period_start, period_end, period_included,
-                    paddle_subscription_id IS NOT NULL, plan_canceled, period_paid_start, paddle_status FROM users WHERE id = ?1",
+                    paddle_subscription_id IS NOT NULL, plan_canceled, period_paid_start, paddle_status, day_seconds, day_until
+             FROM users WHERE id = ?1",
             params![uid],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?)),
+            |r| {
+                Ok((
+                    r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?,
+                    r.get(10)?,
+                ))
+            },
         )
         .optional()?;
-    let Some((plan, extra, mut start, mut end, mut included, subscribed, canceled, paid_start, status)) = row else {
+    let Some((plan, extra, mut start, mut end, mut included, subscribed, canceled, paid_start, status, day_seconds, day_until)) = row
+    else {
         return Ok(None);
     };
+    let day = if day_until.is_some_and(|u| u > now) { day_seconds.max(0) } else { 0 };
     // Paddle 구독은 결제가 끝난 기간에만 포함 시간을 준다(billing: transaction.completed). 여기서 채우는 것은
     // 결제 없이 켠 요금제(운영자·개발 모드)뿐이고, 해지를 예약했으면 넘기지 않는다.
     if plan != "none" && !subscribed && !canceled {
@@ -115,7 +126,7 @@ fn usage_of(c: &rusqlite::Connection, uid: i64, now: i64) -> rusqlite::Result<Op
     }
     let used: i64 = match start {
         Some(s) => c.query_row(
-            "SELECT COALESCE(SUM(seconds - from_extra), 0) FROM usage WHERE user_id = ?1 AND recorded_at >= ?2",
+            "SELECT COALESCE(SUM(seconds - from_extra - from_day), 0) FROM usage WHERE user_id = ?1 AND recorded_at >= ?2",
             params![uid, s],
             |r| r.get(0),
         )?,
@@ -124,19 +135,24 @@ fn usage_of(c: &rusqlite::Connection, uid: i64, now: i64) -> rusqlite::Result<Op
     let included = if plan == "none" { 0 } else { included };
     let paid = !subscribed || (start.is_some() && paid_start == start);
     let past_due = plan != "none" && subscribed && status.as_deref() == Some("past_due");
-    Ok(Some(Usage { plan, included, used, extra, start, end, paid, past_due }))
+    Ok(Some(Usage { plan, included, used, extra, day, day_until, start, end, paid, past_due }))
 }
 
 impl Usage {
-    /// 남은 시간: 이번 기간에 포함된 남은 시간 + 사 둔 추가 시간.
+    /// 남은 시간: 이번 기간에 포함된 남은 시간 + 남은 일일권 + 사 둔 추가 시간.
     fn remaining(&self) -> i64 {
-        (self.included - self.used).max(0) + self.extra
+        (self.included - self.used).max(0) + self.day + self.extra
+    }
+
+    /// 화면에 보이는 요금제(`billing::EFFECTIVE_PLAN_SQL`과 같다): 구독이 없고 일일권이 남아 있으면 "day".
+    fn shown_plan(&self, now: i64) -> &str {
+        if self.plan == "none" && self.day_until.is_some_and(|u| u > now) { "day" } else { &self.plan }
     }
 }
 
 /// 잰 번역 시간을 기록하고, 시간이 다 떨어진 주최자 목록을 돌려준다.
-/// 포함된 시간을 넘긴 만큼은 사 둔 추가 시간에서 빼고, 그 몫을 사용량에 함께 적는다
-/// (나중에 포함 시간이 늘어도 추가 시간으로 낸 몫을 포함 시간에서 또 빼지 않게).
+/// 남은 일일권을 가장 먼저 쓴다(24시간 뒤 사라지므로). 그다음 포함된 시간, 넘긴 만큼은 사 둔 추가 시간에서 빼고,
+/// 일일권·추가 시간으로 낸 몫을 사용량에 함께 적는다(나중에 포함 시간이 늘어도 그 몫을 포함 시간에서 또 빼지 않게).
 pub fn record_usage(
     c: &mut rusqlite::Connection,
     metered: &[Metered],
@@ -160,12 +176,19 @@ pub fn record_usage(
         let Some(before) = usage_of(&tx, uid, now)? else {
             continue;
         };
+        let from_day = m.seconds.clamp(0, before.day);
         let left = (before.included - before.used).max(0);
-        let from_extra = (m.seconds - left).clamp(0, before.extra.max(0));
+        let from_extra = (m.seconds - from_day - left).clamp(0, before.extra.max(0));
         tx.execute(
-            "INSERT INTO usage (user_id, meeting_code, period, seconds, recorded_at, from_extra) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![uid, m.code, period(now), m.seconds, now, from_extra],
+            "INSERT INTO usage (user_id, meeting_code, period, seconds, recorded_at, from_extra, from_day) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![uid, m.code, period(now), m.seconds, now, from_extra, from_day],
         )?;
+        if from_day > 0 {
+            tx.execute(
+                "UPDATE users SET day_seconds = MAX(0, day_seconds - ?2) WHERE id = ?1",
+                params![uid, from_day],
+            )?;
+        }
         if from_extra > 0 {
             tx.execute(
                 "UPDATE users SET extra_seconds = MAX(0, extra_seconds - ?2) WHERE id = ?1",
@@ -285,15 +308,7 @@ pub async fn create_room(
         Err(r) => return r,
     };
     let db = state.auth.db().clone();
-    let plan: String = db
-        .call(move |c| {
-            c.query_row("SELECT plan FROM users WHERE id = ?1", params![uid], |r| {
-                r.get(0)
-            })
-        })
-        .await
-        .unwrap_or_else(|_| "none".into());
-    if plan == "none" {
+    if active_plan(&db, uid).await == "none" {
         return error(StatusCode::PAYMENT_REQUIRED, "plan");
     }
     let code = match state.rooms.create(
@@ -529,6 +544,16 @@ pub async fn list(
     }
 }
 
+/// 회의를 열 수 있는 요금제: 구독 요금제, 없으면 남은 일일권("day"), 둘 다 없으면 "none".
+async fn active_plan(db: &Db, uid: i64) -> String {
+    db.call(move |c| {
+        c.query_row(&format!("SELECT {} FROM users WHERE id = ?1", billing::EFFECTIVE_PLAN_SQL), params![uid], |r| r.get(0))
+    })
+    .await
+    .unwrap_or_else(|_| "none".into())
+}
+
+/// 구독 요금제(`users.plan`). 결제·요금제 바꾸기는 일일권과 상관없이 이것으로 판단한다.
 async fn plan_of(db: &Db, uid: i64) -> String {
     db.call(move |c| {
         c.query_row("SELECT plan FROM users WHERE id = ?1", params![uid], |r| {
@@ -549,7 +574,7 @@ pub async fn schedule(
         Err(r) => return r,
     };
     let db = state.auth.db().clone();
-    if plan_of(&db, uid).await == "none" {
+    if active_plan(&db, uid).await == "none" {
         return error(StatusCode::PAYMENT_REQUIRED, "plan");
     }
     let m = match clean_meeting(&req, None) {
@@ -630,7 +655,7 @@ pub async fn update(
         Err(r) => return r,
     };
     // 요금제가 끝난 계정은 예약 회의를 고치거나 초대 메일을 보내지 못한다(예약과 같게).
-    if plan_of(state.auth.db(), uid).await == "none" {
+    if active_plan(state.auth.db(), uid).await == "none" {
         return error(StatusCode::PAYMENT_REQUIRED, "plan");
     }
     let db = state.auth.db().clone();
@@ -711,7 +736,7 @@ pub async fn invite(
         Err(r) => return r,
     };
     // 요금제가 끝난 계정은 예약 회의를 고치거나 초대 메일을 보내지 못한다(예약과 같게).
-    if plan_of(state.auth.db(), uid).await == "none" {
+    if active_plan(state.auth.db(), uid).await == "none" {
         return error(StatusCode::PAYMENT_REQUIRED, "plan");
     }
     let db = state.auth.db().clone();
@@ -966,11 +991,14 @@ pub async fn billing_summary(State(state): State<AppState>, headers: HeaderMap) 
             Ok(u.map(|u| {
                 json!({
                     "history": history,
-                    "plan": u.plan,
+                    "plan": u.shown_plan(now),
                     // 이번 결제 기간: 포함된 시간(올린 요금제의 차이 포함), 그중 쓴 시간(추가 시간으로 낸 몫 제외), 기간이 끝나 다시 채워지는 때
                     "includedSec": u.included,
                     "usedSec": u.used,
                     "extraSec": u.extra,
+                    // 남은 일일권 시간과 끝나는 때(일일권이 없거나 끝났으면 0·null)
+                    "daySec": u.day,
+                    "dayUntil": u.day_until.filter(|t| *t > now),
                     "remainingSec": u.remaining(),
                     "periodStart": u.start,
                     // 이번 기간의 결제가 아직 끝나지 않았다(첫 결제 직후 잠깐, 또는 갱신 결제가 밀림): 포함 시간은 결제가 끝나면 생긴다.
@@ -994,7 +1022,7 @@ pub async fn billing_summary(State(state): State<AppState>, headers: HeaderMap) 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckoutReq {
-    /// "basic" | "pro" | "hours"
+    /// "basic" | "pro" | "hours" | "day"
     item: String,
     #[serde(default = "one")]
     quantity: i64,
@@ -1036,7 +1064,7 @@ pub async fn checkout(
         Ok(id) => id,
         Err(r) => return r,
     };
-    if !matches!(req.item.as_str(), "basic" | "pro" | "hours") || !(1..=100).contains(&req.quantity)
+    if !matches!(req.item.as_str(), "basic" | "pro" | "hours" | "day") || !(1..=100).contains(&req.quantity)
     {
         return error(StatusCode::BAD_REQUEST, "item");
     }
@@ -1061,6 +1089,7 @@ pub async fn checkout(
         };
     };
     // 이미 구독 중이면 새 구독을 만들지 않는다(두 번 결제되지 않게). 요금제 바꾸기·다시 이어 쓰기로 처리한다.
+    // 일일권도 구독 중에는 팔지 않는다(포함 시간이 있으면 필요 없다. 더 필요하면 추가 시간을 산다).
     if req.item != "hours" && plan != "none" {
         return error(StatusCode::CONFLICT, "subscribed");
     }
@@ -1068,12 +1097,13 @@ pub async fn checkout(
     if !record_consent(&db, uid).await {
         return error(StatusCode::INTERNAL_SERVER_ERROR, "failed");
     }
-    let (price, quantity) = if req.item == "hours" {
-        (b.price_hour.as_str(), req.quantity)
-    } else {
-        (b.price_for(&req.item).unwrap_or_default(), 1)
+    let (price, quantity) = match req.item.as_str() {
+        "hours" => (b.price_hour.as_str(), req.quantity),
+        "day" => (b.price_day.as_str(), 1),
+        _ => (b.price_for(&req.item).unwrap_or_default(), 1),
     };
-    let txn = if req.item == "hours" {
+    // 한 번 결제(추가 시간·일일권)는 결제할 때마다 새 거래다. 구독만 기다리는 거래를 다시 쓴다(구독이 둘 생기지 않게).
+    let txn = if matches!(req.item.as_str(), "hours" | "day") {
         match b.create_transaction(price, quantity, uid).await {
             Ok(t) => t,
             Err(e) => {
@@ -1242,8 +1272,12 @@ pub async fn dev_activate(
         Ok(id) => id,
         Err(r) => return r,
     };
-    if !matches!(req.item.as_str(), "basic" | "pro") && plan_of(state.auth.db(), uid).await == "none" {
+    let plan = plan_of(state.auth.db(), uid).await;
+    if req.item == "hours" && plan == "none" {
         return error(StatusCode::PAYMENT_REQUIRED, "plan");
+    }
+    if req.item == "day" && plan != "none" {
+        return error(StatusCode::CONFLICT, "subscribed");
     }
     let now = now_secs();
     let renews = now + billing::DEFAULT_PERIOD;
@@ -1256,6 +1290,12 @@ pub async fn dev_activate(
                 "UPDATE users SET plan = ?2, plan_renews_at = ?3, plan_canceled = 0,
                    period_start = ?4, period_end = ?3, period_included = ?5 WHERE id = ?1",
                 params![uid, req.item, renews, now, included_seconds(&req.item)],
+            ),
+            // 웹훅의 일일권 반영(billing `Grant::Day`)과 같다.
+            "day" => c.execute(
+                "UPDATE users SET day_seconds = CASE WHEN day_until > ?3 THEN day_seconds ELSE 0 END + ?2,
+                   day_until = MAX(COALESCE(day_until, 0), ?3 + ?4) WHERE id = ?1",
+                params![uid, billing::DAY_PASS_SECONDS, now, billing::DAY_PASS_LENGTH],
             ),
             _ => c.execute(
                 "UPDATE users SET extra_seconds = extra_seconds + ?2 WHERE id = ?1",
@@ -1270,7 +1310,7 @@ pub async fn dev_activate(
             // 실제 결제처럼 영수증 메일도 같은 경로로 보낸다(개발 모드에서는 data/mail에 파일로 남는다).
             if matches!(item.as_str(), "basic" | "pro") {
                 // 가격은 web의 PLAN_PRICE(AccountPages)·PRICE(BillingPages)와 같다. 바꿀 때 함께 바꾼다.
-                let amount = if item == "pro" { "$39.00" } else { "$19.00" };
+                let amount = if item == "pro" { "$49.00" } else { "$19.00" };
                 send_receipt(
                     &state,
                     billing::Receipt { user: uid, plan: item.clone(), amount: amount.into(), renews: Some(renews) },
@@ -1628,9 +1668,9 @@ mod tests {
                 peak: 2,
             }]
         };
-        // 포함된 10시간 중 9시간 59분 쓰기 → 아직 남음
+        // 포함된 시간에서 1분 덜 쓰기 → 아직 남음
         let out = db
-            .blocking(|c| record_usage(c, &m(10 * 3600 - 60), &HashSet::new(), now))
+            .blocking(|c| record_usage(c, &m(billing::included_seconds("basic") - 60), &HashSet::new(), now))
             .unwrap();
         assert!(out.is_empty());
         // 2분 더 → 포함 시간 60초 넘김 → 추가 시간 100초에서 60초 차감
@@ -1681,17 +1721,19 @@ mod tests {
         let db = Db::memory();
         let start = 1_794_909_600;
         let uid = subscriber(&db, "basic", 2 * 3600, start);
+        let (basic, pro) = (billing::included_seconds("basic"), billing::included_seconds("pro"));
         // 포함 10시간 + 산 시간에서 1시간
-        db.blocking(|c| record_usage(c, &metered(uid, 11 * 3600), &HashSet::new(), start + 3600)).unwrap();
+        db.blocking(|c| record_usage(c, &metered(uid, basic + 3600), &HashSet::new(), start + 3600)).unwrap();
         let u = db.blocking(|c| usage_of(c, uid, start + 3600)).unwrap().unwrap();
-        assert_eq!((u.used, u.extra, u.remaining()), (10 * 3600, 3600, 3600));
+        assert_eq!((u.used, u.extra, u.remaining()), (basic, 3600, 3600));
         // 기간 한가운데에서 Pro로 올리면 포함 시간이 20시간이 된다. 산 시간으로 낸 1시간을 포함 시간에서 또 빼지 않는다.
         let half = start + billing::DEFAULT_PERIOD / 2;
-        let included = billing::included_after_change(10 * 3600, "basic", "pro", (start, start + billing::DEFAULT_PERIOD), half);
+        let included = billing::included_after_change(basic, "basic", "pro", (start, start + billing::DEFAULT_PERIOD), half);
         db.blocking(|c| c.execute("UPDATE users SET plan = 'pro', period_included = ?2 WHERE id = ?1", params![uid, included]))
             .unwrap();
         let u = db.blocking(|c| usage_of(c, uid, half)).unwrap().unwrap();
-        assert_eq!((u.included, u.remaining()), (20 * 3600, 10 * 3600 + 3600));
+        let half_up = basic + (pro - basic) / 2;
+        assert_eq!((u.included, u.remaining()), (half_up, half_up - basic + 3600));
     }
 
     #[test]
@@ -1701,7 +1743,7 @@ mod tests {
         let start = 1_794_909_600;
         let end = start + billing::DEFAULT_PERIOD;
         let uid = subscriber(&db, "pro", 0, start);
-        db.blocking(|c| record_usage(c, &metered(uid, 30 * 3600), &HashSet::new(), start + 60)).unwrap();
+        db.blocking(|c| record_usage(c, &metered(uid, billing::included_seconds("pro")), &HashSet::new(), start + 60)).unwrap();
         for (column, value) in [("paddle_subscription_id", "'sub_1'"), ("plan_canceled", "1")] {
             db.blocking(|c| {
                 c.execute_batch(&format!(
@@ -1737,19 +1779,52 @@ mod tests {
     }
 
     #[test]
+    fn day_pass_hours_are_spent_before_bought_hours_and_expire() {
+        let db = Db::memory();
+        let now = now_secs();
+        let uid = db
+            .blocking(move |c| {
+                c.execute(
+                    "INSERT INTO users (email, extra_seconds, day_seconds, day_until, created_at) VALUES ('a@b.co', 3600, ?1, ?2, 1)",
+                    params![billing::DAY_PASS_SECONDS, now + 600],
+                )?;
+                Ok(c.last_insert_rowid())
+            })
+            .unwrap();
+        fn db_plan(db: &Db, uid: i64) -> String {
+            db.blocking(move |c| {
+                c.query_row(&format!("SELECT {} FROM users WHERE id = ?1", billing::EFFECTIVE_PLAN_SQL), params![uid], |r| r.get(0))
+            })
+            .unwrap()
+        }
+        assert_eq!(db_plan(&db, uid), "day");
+        // 일일권 3시간 + 30분: 일일권을 먼저 다 쓰고 나머지를 산 시간에서 뺀다.
+        let out = db.blocking(move |c| record_usage(c, &metered(uid, billing::DAY_PASS_SECONDS + 1800), &HashSet::new(), now)).unwrap();
+        assert!(out.is_empty());
+        let u = db.blocking(move |c| usage_of(c, uid, now)).unwrap().unwrap();
+        assert_eq!((u.day, u.extra, u.used, u.remaining(), u.shown_plan(now)), (0, 1800, 0, 1800, "day"));
+        // 24시간이 지나면 남은 일일권은 세지 않고, 회의를 열 수 있는 요금제도 없어진다.
+        db.blocking(move |c| c.execute("UPDATE users SET day_seconds = 3600, day_until = ?2 WHERE id = ?1", params![uid, now - 1]))
+            .unwrap();
+        let u = db.blocking(move |c| usage_of(c, uid, now)).unwrap().unwrap();
+        assert_eq!((u.day, u.remaining(), u.shown_plan(now)), (0, 1800, "none"));
+        assert_eq!(db_plan(&db, uid), "none");
+    }
+
+    #[test]
     fn plans_without_payment_refill_when_the_period_ends() {
         let db = Db::memory();
         let start = 1_794_909_600;
         let uid = subscriber(&db, "pro", 0, start);
         let host = uid.to_string();
-        let out = db.blocking(|c| record_usage(c, &metered(uid, 30 * 3600), &HashSet::new(), start + 86_400)).unwrap();
+        let out = db.blocking(|c| record_usage(c, &metered(uid, billing::included_seconds("pro")), &HashSet::new(), start + 86_400)).unwrap();
         assert!(out.contains(&host), "used up");
         // 결제 없이 켠 요금제(운영자·개발 모드)는 기간이 끝나면 같은 길이로 넘겨 다시 채운다.
         let end = start + billing::DEFAULT_PERIOD;
         let out = db.blocking(|c| record_usage(c, &[], &HashSet::from([host.clone()]), end + 1)).unwrap();
         assert!(out.is_empty());
         let u = db.blocking(|c| usage_of(c, uid, end + 1)).unwrap().unwrap();
-        assert_eq!((u.start, u.end, u.included, u.used), (Some(end), Some(end + billing::DEFAULT_PERIOD), 30 * 3600, 0));
+        assert_eq!((u.start, u.end, u.included, u.used), (Some(end), Some(end + billing::DEFAULT_PERIOD), billing::included_seconds("pro"), 0));
         // 요금제가 없으면 포함 시간은 없고 산 시간만 남는다.
         db.blocking(|c| c.execute("UPDATE users SET plan = 'none', extra_seconds = 60 WHERE id = ?1", params![uid])).unwrap();
         let u = db.blocking(|c| usage_of(c, uid, end + 2)).unwrap().unwrap();

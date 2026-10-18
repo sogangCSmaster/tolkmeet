@@ -220,6 +220,10 @@ const MIGRATIONS: &[&str] = &[
      UPDATE users SET period_paid_start = period_start WHERE plan != 'none';",
     // 11: Paddle 구독 상태(active·past_due 등). 갱신 결제가 실패한 경우를 첫 결제 확인 중과 구별해 알리려고.
     "ALTER TABLE users ADD COLUMN paddle_status TEXT;",
+    // 12: 일일권(한 번 결제, 산 때부터 24시간 동안 쓰는 시간). 남은 시간과 끝나는 때, 사용량마다 일일권에서 뺀 몫.
+    "ALTER TABLE users ADD COLUMN day_seconds INTEGER NOT NULL DEFAULT 0;
+     ALTER TABLE users ADD COLUMN day_until INTEGER;
+     ALTER TABLE usage ADD COLUMN from_day INTEGER NOT NULL DEFAULT 0;",
 ];
 
 impl Db {
@@ -408,7 +412,8 @@ mod tests {
         let (start, end, included, at) = rows[0];
         let (start, end) = (start.unwrap(), end.unwrap());
         assert!(start <= now_secs() && now_secs() < end && end - start >= 28 * 86_400);
-        assert_eq!((included, at), (crate::billing::included_seconds("pro"), 7000));
+        // 마이그레이션 10이 넣은 그때의 Pro 시간(30시간)이다. 지금 요금제 값과 상관없다.
+        assert_eq!((included, at), (108_000, 7000));
         assert_eq!(rows[1], (None, None, 0, 0));
     }
 

@@ -3,7 +3,7 @@
 // 스크립트는 맨 아래의 작은 로더 하나뿐이다(기능 카드의 장면 모듈을 필요할 때 불러온다).
 import type { Dict } from '../i18n/en'
 import Base from '../layouts/Base.astro'
-import { COMPANY, GITHUB_URL, legalLinks, LOCALES, SIGN_IN_URL, SIGNUP_URL, SITE_URL } from '../site'
+import { APP_URL, COMPANY, GITHUB_URL, legalLinks, LOCALES, SIGN_IN_URL, SIGNUP_URL, SITE_URL } from '../site'
 import Business from './Business.astro'
 import Gemini from './Gemini.astro'
 import Mark from './Mark.astro'
@@ -78,7 +78,7 @@ const jsonLd = [
     operatingSystem: 'Web browser',
     inLanguage: t.lang,
     publisher: { '@id': ORG_ID },
-    offers: t.plans.map((p) => ({ '@type': 'Offer', name: p.name, price: p.price.replace('$', ''), priceCurrency: 'USD', priceSpecification: { '@type': 'UnitPriceSpecification', price: p.price.replace('$', ''), priceCurrency: 'USD', unitCode: 'MON' } })),
+    offers: t.plans.map((p) => ({ '@type': 'Offer', name: p.name, price: p.price.replace('$', ''), priceCurrency: 'USD', priceSpecification: { '@type': 'UnitPriceSpecification', price: p.price.replace('$', ''), priceCurrency: 'USD', unitCode: p.item === 'day' ? 'DAY' : 'MON' } })),
   },
   {
     '@context': 'https://schema.org',
@@ -366,7 +366,8 @@ const jsonLd = [
             <h3>{p.name}</h3>
             <p class="plan-price">{p.price}<span>{p.unit}</span></p>
             <p class="plan-note">{p.note}</p>
-            <a class={`btn plan-cta ${i === 0 ? 'btn-cta' : 'btn-ink'}`} href={SIGNUP_URL}>{p.cta}</a>
+            {/* 일일권은 결제 화면으로 바로 보낸다(로그인 전이면 앱이 가입부터 받고 돌아온다). */}
+            <a class={`btn plan-cta ${i === 0 ? 'btn-cta' : 'btn-ink'}`} href={p.item === 'day' ? `${APP_URL}/checkout?item=day` : SIGNUP_URL}>{p.cta}</a>
           </div>
         ))}
       </div>

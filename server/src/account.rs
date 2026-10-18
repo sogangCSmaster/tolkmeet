@@ -1007,10 +1007,13 @@ pub async fn user_json(db: &Db, id: i64, current_token: Option<&str>) -> Value {
     db.call(move |c| {
         let user = c
             .query_row(
-                "SELECT id, email, name, locale, email_verified, password_hash IS NOT NULL, google_sub IS NOT NULL,
-                        totp_enabled, plan, plan_renews_at, plan_canceled, operator, created_at,
-                        display_name, prefs, password_changed_at
-                 FROM users WHERE id = ?1",
+                &format!(
+                    "SELECT id, email, name, locale, email_verified, password_hash IS NOT NULL, google_sub IS NOT NULL,
+                            totp_enabled, {}, plan_renews_at, plan_canceled, operator, created_at,
+                            display_name, prefs, password_changed_at
+                     FROM users WHERE id = ?1",
+                    crate::billing::EFFECTIVE_PLAN_SQL
+                ),
                 params![id],
                 |r| {
                     Ok(json!({

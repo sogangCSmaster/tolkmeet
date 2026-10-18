@@ -105,7 +105,7 @@ Server environment variables:
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | (none) | Google sign-in (OAuth "Web application" client). Register the redirect URI `{APP_ORIGIN}/api/auth/google/callback` (dev: `http://localhost:5173/api/auth/google/callback`). If empty, the Google button is hidden. Failures are logged with a reason (`google sign-in failed`) |
 | `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_EMAIL_TOKEN` | (none) | Sends account emails through Cloudflare Email Sending (REST API). The token needs the **Email Sending: Edit** permission on the account that onboarded the sending domain (Compute › Email Service › Email Sending › Onboard Domain, which adds the SPF/DKIM/DMARC records). Arbitrary recipients require the Workers Paid plan. If either is empty, dev mode writes mail to `server/data/mail/` (text and HTML) |
 | `MAIL_FROM` | `Tolkmeet <no-reply@tolkmeet.com>` | Sender for account emails; must be on the onboarded domain |
-| `PADDLE_API_KEY`, `PADDLE_CLIENT_TOKEN`, `PADDLE_WEBHOOK_SECRET`, `PADDLE_PRICE_BASIC`, `PADDLE_PRICE_PRO`, `PADDLE_PRICE_HOUR` | (none) | Paddle billing (all required together). `PADDLE_ENV=production` for live, otherwise sandbox. If missing, checkout is disabled (dev mode activates plans without payment) |
+| `PADDLE_API_KEY`, `PADDLE_CLIENT_TOKEN`, `PADDLE_WEBHOOK_SECRET`, `PADDLE_PRICE_BASIC`, `PADDLE_PRICE_PRO`, `PADDLE_PRICE_HOUR`, `PADDLE_PRICE_DAY` | (none) | Paddle billing (all required together). `PADDLE_ENV=production` for live, otherwise sandbox. If missing, checkout is disabled (dev mode activates plans without payment) |
 
 Per-step translation latency (first token, total, STT → translation) is logged at debug level: `RUST_LOG=info,tolkmeet_server::pipeline=debug`. Caption text is never logged.
 

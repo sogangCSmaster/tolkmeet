@@ -12,11 +12,19 @@ use crate::db::{Db, OptionalExtension, now_secs, params};
 /// 요금제: 결제 기간(한 달)마다 포함되는 번역 시간(초). 요금제가 없으면 0(사 둔 추가 시간만 쓴다).
 pub fn included_seconds(plan: &str) -> i64 {
     match plan {
-        "basic" => 10 * 3600,
-        "pro" => 30 * 3600,
+        "basic" => 8 * 3600,
+        "pro" => 20 * 3600,
         _ => 0,
     }
 }
+
+/// 일일권 하나에 든 번역 시간과 쓸 수 있는 기간(산 때부터).
+pub const DAY_PASS_SECONDS: i64 = 3 * 3600;
+pub const DAY_PASS_LENGTH: i64 = 86_400;
+
+/// 화면·API에 보이는 요금제: 구독이 없어도 일일권이 남아 있으면 "day". 구독 상태(`users.plan`)는 그대로 둔다.
+/// `users` 표의 열 이름을 그대로 쓰는 SQL 식이다.
+pub const EFFECTIVE_PLAN_SQL: &str = "CASE WHEN plan = 'none' AND day_until > unixepoch() THEN 'day' ELSE plan END";
 
 /// 결제 기간을 모를 때(개발 모드, 기간이 빠진 웹훅) 쓰는 한 기간의 길이.
 pub const DEFAULT_PERIOD: i64 = 30 * 86_400;
@@ -40,6 +48,7 @@ pub struct Billing {
     pub price_basic: String,
     pub price_pro: String,
     pub price_hour: String,
+    pub price_day: String,
     http: reqwest::Client,
 }
 
@@ -51,6 +60,20 @@ impl Billing {
                 .map(|v| v.trim().to_owned())
                 .filter(|v| !v.is_empty())
         };
+        // 몇 개만 있으면 결제가 조용히 꺼진다(구독 웹훅도 반영하지 않는다). 빠진 이름을 크게 남긴다.
+        const KEYS: [&str; 7] = [
+            "PADDLE_API_KEY",
+            "PADDLE_CLIENT_TOKEN",
+            "PADDLE_WEBHOOK_SECRET",
+            "PADDLE_PRICE_BASIC",
+            "PADDLE_PRICE_PRO",
+            "PADDLE_PRICE_HOUR",
+            "PADDLE_PRICE_DAY",
+        ];
+        let missing: Vec<&str> = KEYS.into_iter().filter(|k| var(k).is_none()).collect();
+        if !missing.is_empty() && missing.len() < KEYS.len() {
+            tracing::error!(?missing, "some PADDLE_* settings are missing: billing is off");
+        }
         let billing = Self {
             api_key: var("PADDLE_API_KEY")?,
             client_token: var("PADDLE_CLIENT_TOKEN")?,
@@ -59,6 +82,7 @@ impl Billing {
             price_basic: var("PADDLE_PRICE_BASIC")?,
             price_pro: var("PADDLE_PRICE_PRO")?,
             price_hour: var("PADDLE_PRICE_HOUR")?,
+            price_day: var("PADDLE_PRICE_DAY")?,
             http: reqwest::Client::new(),
         };
         Some(billing)
@@ -354,6 +378,7 @@ impl Billing {
                 .filter(|i| i["price"]["id"].as_str() == Some(self.price_hour.as_str()))
                 .map(|i| i["quantity"].as_i64().unwrap_or(1))
                 .sum(),
+            day_pass: items.iter().any(|i| i["price"]["id"].as_str() == Some(self.price_day.as_str())),
             // 해지를 예약하면 Paddle은 next_billed_at을 비운다. 그때는 해지되는 날을 끝나는 날로 둔다.
             renews: time(&data["next_billed_at"])
                 .or_else(|| canceling.then(|| time(&data["scheduled_change"]["effective_at"])).flatten()),
@@ -476,6 +501,8 @@ struct Event {
     status: String,
     plan: Option<&'static str>,
     hours: i64,
+    /// 일일권 결제(가격 `price_day`가 들어 있다)
+    day_pass: bool,
     renews: Option<i64>,
     canceling: bool,
     /// 구독의 current_billing_period
@@ -595,7 +622,7 @@ impl Event {
                 queue_cancellation(tx, sub, false, now)?;
             } else if self.kind == "transaction.completed" {
                 // 돌려줄 곳이 없는 결제: 운영자가 Paddle에서 환불한다. 어떤 결제든 표시해 두어 그 환불을 다시 받지 않게 한다.
-                if self.hours > 0 || self.plan.is_some() {
+                if self.hours > 0 || self.plan.is_some() || self.day_pass {
                     tracing::error!(event = %self.id, transaction = ?self.entity, "payment for a deleted account: refund it in Paddle");
                 }
                 skip_payment(tx, self.entity.as_deref(), now)?;
@@ -778,6 +805,8 @@ impl Event {
                 #[derive(Clone, Copy)]
                 enum Grant {
                     Hours(i64),
+                    /// 일일권: 그 시간과 쓸 수 있는 기간의 시작(결제한 때)
+                    Day(i64),
                     Period(&'static str, (i64, i64)),
                     /// 차액만큼의 시간과 그 시간이 들어갈 기간의 시작
                     Upgrade(i64, Option<i64>),
@@ -785,6 +814,13 @@ impl Event {
                 }
                 let grant = if self.hours > 0 {
                     Grant::Hours(self.hours * 3600)
+                } else if self.day_pass {
+                    // 24시간이 다 지난 뒤에 받은 결제(서버 장애로 Paddle이 늦게 다시 보낸 경우 등)는 받은 때부터 센다.
+                    // 낸 일일권을 한 번도 못 쓰고 끝나지 않게.
+                    if at + DAY_PASS_LENGTH <= now {
+                        tracing::warn!(event = %self.id, transaction = %txn, "day pass payment arrived after its 24 hours: started now");
+                    }
+                    Grant::Day(if at + DAY_PASS_LENGTH <= now { now } else { at })
                 } else if let Some(plan) = plan {
                     match self.origin.as_str() {
                         _ if base => Grant::Period(
@@ -805,6 +841,7 @@ impl Event {
                 };
                 let (kind, seconds, period) = match grant {
                     Grant::Hours(s) => ("hours", s, None),
+                    Grant::Day(a) => ("day", DAY_PASS_SECONDS, Some(a)),
                     Grant::Period(plan, (s, _)) => ("subscription", included_seconds(plan), Some(s)),
                     Grant::Upgrade(s, p) => ("subscription", s, p),
                     Grant::Nothing => ("subscription", 0, None),
@@ -824,6 +861,17 @@ impl Event {
                         tx.execute(
                             "UPDATE users SET extra_seconds = extra_seconds + ?2 WHERE id = ?1",
                             params![user, s],
+                        )?;
+                    }
+                    // 아직 남은 일일권이 있으면 시간을 합치고, 끝나는 때는 새로 산 때부터 24시간으로 옮긴다.
+                    // 끝난 일일권의 남은 시간은 버린다. 늦게 온 옛 결제가 더 늦게 산 일일권의 끝을 당기지 않게 한다.
+                    Grant::Day(a) => {
+                        tx.execute(
+                            "UPDATE users SET
+                               day_seconds = CASE WHEN day_until > ?3 THEN day_seconds ELSE 0 END + ?2,
+                               day_until = MAX(COALESCE(day_until, 0), ?3 + ?4)
+                             WHERE id = ?1",
+                            params![user, DAY_PASS_SECONDS, a, DAY_PASS_LENGTH],
                         )?;
                     }
                     // 그 기간의 포함 시간을 준다(지난 기간의 늦은 결제는 빼고). 같은 기간이면 이미 더한 차액을 지우지 않게 더하고,
@@ -935,7 +983,7 @@ impl Event {
         // 추가 시간·차액으로 준 시간 중 돌려준 몫(누적)만큼 다시 뺀다(처음·갱신 결제의 시간은 요금제로 다룬다).
         let target = if whole { seconds } else { seconds * refunded / total };
         let back = (target - seconds_back).max(0);
-        let returns_hours = kind == "hours" || origin == "subscription_update";
+        let returns_hours = kind == "hours" || kind == "day" || origin == "subscription_update";
         if returns_hours {
             tx.execute(
                 "UPDATE paddle_transactions SET seconds_back = ?2 WHERE id = ?1",
@@ -948,6 +996,18 @@ impl Event {
                 "UPDATE users SET extra_seconds = MAX(0, extra_seconds - ?2) WHERE id = ?1",
                 params![user, back],
             )?;
+        } else if kind == "day" {
+            // 그 일일권의 24시간이 지났으면 뺄 것이 없다(지금 남은 시간은 따로 낸 다른 일일권의 것이다).
+            // 아직이면 돌려준 몫만큼 빼고(이미 쓴 몫은 되돌릴 수 없다), 그래서 남은 시간이 없을 때만 일일권을 끝낸다
+            // (합쳐진 다른 일일권의 시간은 남긴다).
+            if period.is_some_and(|p| p + DAY_PASS_LENGTH > now) {
+                tx.execute(
+                    "UPDATE users SET day_seconds = MAX(0, day_seconds - ?2),
+                       day_until = CASE WHEN day_seconds - ?2 <= 0 THEN MIN(COALESCE(day_until, 0), ?3) ELSE day_until END
+                     WHERE id = ?1",
+                    params![user, back, now],
+                )?;
+            }
         // 차지백은 언제나, 전액 환불은 지금 기간의 결제일 때만 요금제를 끝낸다(지난 기간 결제의 환불은 따로 낸 지금 기간을 끝내지 않는다).
         } else if self.action == "chargeback" || (whole && origin != "subscription_update" && period.is_some() && period == current_period) {
             if let Some(sub) = subscription.or_else(|| self.subscription_ref.clone()) {
@@ -1175,6 +1235,11 @@ pub fn parse_rfc3339_ms(s: &str) -> Option<i64> {
 mod tests {
     use super::*;
 
+    const BASIC: i64 = 8 * 3600;
+    const PRO: i64 = 20 * 3600;
+    /// 기간 한가운데(남은 절반)에서 Basic → Pro로 올린 뒤의 포함 시간
+    const HALF_UP: i64 = BASIC + (PRO - BASIC) / 2;
+
     #[test]
     fn signature_must_match_and_be_recent() {
         let body = br#"{"event_id":"evt_1"}"#;
@@ -1247,6 +1312,7 @@ mod tests {
             price_basic: "pri_basic".into(),
             price_pro: "pri_pro".into(),
             price_hour: "pri_hour".into(),
+            price_day: "pri_day".into(),
             http: reqwest::Client::new(),
         }
     }
@@ -1505,19 +1571,19 @@ mod tests {
         let r = row(&db, uid);
         assert_eq!((r.plan.as_str(), r.start, r.end, r.included), ("basic", parse_rfc3339(OCT.0), parse_rfc3339(OCT.1), 0));
         b.apply_event(&db, paid("t1", uid, &sig, "txn_1", "web", &[("pri_basic", 1, None)], OCT)).await.unwrap();
-        assert_eq!(row(&db, uid).included, 10 * 3600);
+        assert_eq!(row(&db, uid).included, BASIC);
         // 기간 한가운데에서 Pro로 올리면 구독 이벤트로는 그대로, 차액 거래(남은 절반)가 끝나면 차이의 절반(10시간)을 더한다.
         b.apply_event(&db, ev("e2", "pri_pro", "2026-10-16T00:00:00Z", OCT)).await.unwrap();
-        assert_eq!((row(&db, uid).plan.as_str(), row(&db, uid).included), ("pro", 10 * 3600));
+        assert_eq!((row(&db, uid).plan.as_str(), row(&db, uid).included), ("pro", BASIC));
         let upgrade = [("pri_pro", 1, Some("0.5")), ("pri_basic", -1, Some("0.5"))];
         b.apply_event(&db, paid("t2", uid, &sig, "txn_up", "subscription_update", &upgrade, OCT)).await.unwrap();
         b.apply_event(&db, paid("t2b", uid, &sig, "txn_up", "subscription_update", &upgrade, OCT)).await.unwrap();
-        assert_eq!(row(&db, uid).included, 20 * 3600, "once per transaction");
+        assert_eq!(row(&db, uid).included, HALF_UP, "once per transaction");
         b.apply_event(&db, ev("e3", "pri_pro", "2026-10-16T00:00:01Z", OCT)).await.unwrap();
-        assert_eq!(row(&db, uid).included, 20 * 3600);
+        assert_eq!(row(&db, uid).included, HALF_UP);
         // 내리면 이번 기간은 그대로(청구도 환불도 없다), 다음 기간부터 Basic.
         b.apply_event(&db, ev("e4", "pri_basic", "2026-10-20T00:00:00Z", OCT)).await.unwrap();
-        assert_eq!((row(&db, uid).plan.as_str(), row(&db, uid).included), ("basic", 20 * 3600));
+        assert_eq!((row(&db, uid).plan.as_str(), row(&db, uid).included), ("basic", HALF_UP));
         // 갱신: Paddle은 결제 전에 기간부터 옮긴다. 결제가 밀려도(past_due) 새 기간의 시간은 결제가 끝날 때까지 없다.
         b.apply_event(&db, ev("e5", "pri_basic", "2026-10-31T00:00:01Z", NOV)).await.unwrap();
         let mut late = sub_event("e6", "subscription.past_due", uid, &sig, "pri_basic", "2026-10-31T00:00:05Z", NOV);
@@ -1527,13 +1593,13 @@ mod tests {
         assert_eq!((r.plan.as_str(), r.start, r.included), ("basic", parse_rfc3339(NOV.0), 0));
         assert_eq!(status(&db, uid).as_deref(), Some("past_due"));
         b.apply_event(&db, paid("t3", uid, &sig, "txn_nov", "subscription_recurring", &[("pri_basic", 1, None)], NOV)).await.unwrap();
-        assert_eq!(row(&db, uid).included, 10 * 3600);
+        assert_eq!(row(&db, uid).included, BASIC);
         // 결제가 구독 이벤트보다 먼저 와도 같다(기간을 옮기고 시간을 준 뒤, 늦게 온 구독 이벤트는 그대로 둔다).
         const DEC: (&str, &str) = ("2026-11-30T00:00:00Z", "2026-12-30T00:00:00Z");
         b.apply_event(&db, paid("t4", uid, &sig, "txn_dec", "subscription_recurring", &[("pri_basic", 1, None)], DEC)).await.unwrap();
         b.apply_event(&db, ev("e7", "pri_basic", "2026-11-30T00:00:01Z", DEC)).await.unwrap();
         let r = row(&db, uid);
-        assert_eq!((r.start, r.included), (parse_rfc3339(DEC.0), 10 * 3600));
+        assert_eq!((r.start, r.included), (parse_rfc3339(DEC.0), BASIC));
         // 지난 기간의 늦은 결제는 지금 기간을 바꾸지 않는다.
         b.apply_event(&db, paid("t5", uid, &sig, "txn_old", "subscription_recurring", &[("pri_basic", 1, None)], NOV)).await.unwrap();
         assert_eq!(row(&db, uid).start, parse_rfc3339(DEC.0));
@@ -1550,7 +1616,7 @@ mod tests {
             .await
             .unwrap();
         let r = row(&db, uid);
-        assert_eq!((r.plan.as_str(), r.included), ("pro", 30 * 3600));
+        assert_eq!((r.plan.as_str(), r.included), ("pro", PRO));
     }
 
     #[tokio::test]
@@ -1615,6 +1681,63 @@ mod tests {
         json!({ "event_id": event, "event_type": kind, "occurred_at": "2026-10-10T00:00:00Z",
                 "data": { "id": id, "action": action, "type": if full { "full" } else { "partial" }, "status": status,
                           "transaction_id": txn, "customer_id": "ctm_1", "currency_code": "USD", "totals": { "total": total } } })
+    }
+
+    /// 유닉스 초 → RFC 3339(UTC). 테스트가 지금 기준의 시각을 만들 때 쓴다.
+    fn rfc3339(secs: i64) -> String {
+        let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+        let (y, m) = crate::meetings::year_month(secs);
+        let month_start = parse_rfc3339(&format!("{y:04}-{m:02}-01T00:00:00Z")).unwrap().div_euclid(86_400);
+        format!("{y:04}-{m:02}-{:02}T{:02}:{:02}:{:02}Z", days - month_start + 1, rem / 3600, rem % 3600 / 60, rem % 60)
+    }
+
+    #[tokio::test]
+    async fn day_passes_last_a_day_stack_while_active_and_are_taken_back_on_refund() {
+        let (db, b, uid, sig) = fixture();
+        let day = || -> (i64, Option<i64>, String) {
+            db.blocking(move |c| {
+                c.query_row("SELECT day_seconds, day_until, plan FROM users WHERE id = ?1", params![uid], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                })
+            })
+            .unwrap()
+        };
+        let pass = |event: &str, txn: &str, at: i64| {
+            json!({ "event_id": event, "event_type": "transaction.completed", "occurred_at": rfc3339(at),
+                "data": { "id": txn, "origin": "web", "currency_code": "USD", "custom_data": { "user_id": uid.to_string(), "sig": sig },
+                          "details": { "totals": { "grand_total": "1200" } },
+                          "items": [{ "price": { "id": "pri_day" }, "quantity": 1 }] } })
+        };
+        let now = now_secs();
+        // 3시간, 산 때부터 24시간. 같은 결제는 한 번만. 구독 요금제는 그대로다.
+        let t0 = now - 3600;
+        b.apply_event(&db, pass("d1", "txn_d1", t0)).await.unwrap();
+        b.apply_event(&db, pass("d1b", "txn_d1", t0)).await.unwrap();
+        assert_eq!(day(), (DAY_PASS_SECONDS, Some(t0 + DAY_PASS_LENGTH), "none".into()));
+        assert_eq!(row(&db, uid).extra, 0);
+        // 남아 있을 때 하나 더 사면 시간을 합치고 끝나는 때를 새로 산 때부터 24시간으로 옮긴다.
+        let t1 = now - 60;
+        db.blocking(move |c| c.execute("UPDATE users SET day_seconds = 3600 WHERE id = ?1", params![uid])).unwrap();
+        b.apply_event(&db, pass("d2", "txn_d2", t1)).await.unwrap();
+        assert_eq!(day(), (3600 + DAY_PASS_SECONDS, Some(t1 + DAY_PASS_LENGTH), "none".into()));
+        // 먼저 산 일일권(d1)을 전액 환불해도 합쳐진 다른 일일권의 시간은 남고 끝나는 때도 그대로다.
+        b.apply_event(&db, adjustment("r1", "adj_d1", "refund", "approved", "txn_d1", true, "1200")).await.unwrap();
+        assert_eq!(day(), (3600, Some(t1 + DAY_PASS_LENGTH), "none".into()));
+        // 남은 시간이 그 일일권 몫보다 적으면 0에서 멈추고 일일권을 끝낸다.
+        b.apply_event(&db, adjustment("r2", "adj_d2", "refund", "approved", "txn_d2", true, "1200")).await.unwrap();
+        let (secs, until, _) = day();
+        assert!(secs == 0 && until.unwrap() <= now_secs());
+        // 24시간이 다 지나서 온 결제는 받은 때부터 센다(낸 일일권을 못 쓰고 끝나지 않게).
+        b.apply_event(&db, pass("d3", "txn_d3", now - 3 * 86_400)).await.unwrap();
+        let (secs, until, _) = day();
+        assert!(secs == DAY_PASS_SECONDS && until.unwrap() >= now + DAY_PASS_LENGTH);
+        // 끝난 일일권의 환불은 지금 남은(따로 낸) 일일권을 건드리지 않는다.
+        db.blocking(move |c| {
+            c.execute("UPDATE paddle_transactions SET period_start = ?1 WHERE id = 'txn_d3'", params![now - 3 * 86_400])
+        })
+        .unwrap();
+        b.apply_event(&db, adjustment("r3", "adj_d3", "refund", "approved", "txn_d3", true, "1200")).await.unwrap();
+        assert_eq!(day().0, DAY_PASS_SECONDS);
     }
 
     #[tokio::test]
@@ -1687,11 +1810,11 @@ mod tests {
             .unwrap();
         let upgrade = [("pri_pro", 1, Some("0.5")), ("pri_basic", -1, Some("0.5"))];
         b.apply_event(&db, paid("t2", uid, &sig, "txn_up", "subscription_update", &upgrade, OCT)).await.unwrap();
-        assert_eq!(row(&db, uid).included, 20 * 3600);
+        assert_eq!(row(&db, uid).included, HALF_UP);
         // 차액을 모두 돌려주면 그 차액으로 더한 시간만 뺀다(요금제는 그대로).
         let out = b.apply_event(&db, adjustment("a1", "adj_1", "refund", "approved", "txn_up", true, "1900")).await.unwrap();
         let r = row(&db, uid);
-        assert_eq!((r.plan.as_str(), r.included, out.revoked), ("pro", 10 * 3600, None));
+        assert_eq!((r.plan.as_str(), r.included, out.revoked), ("pro", BASIC, None));
         // 차액 거래라도 차지백이면 요금제를 끝내고 구독을 해지 대기열에 넣는다.
         b.apply_event(&db, paid("t3", uid, &sig, "txn_up2", "subscription_update", &upgrade, OCT)).await.unwrap();
         let out = b.apply_event(&db, adjustment("a2", "adj_2", "chargeback", "approved", "txn_up2", true, "1900")).await.unwrap();
@@ -1769,7 +1892,7 @@ mod tests {
     async fn a_late_renewal_payment_keeps_upgrade_hours_in_either_order() {
         const UPN: (&str, &str) = ("2026-11-01T00:00:00Z", "2026-11-30T00:00:00Z");
         let up = [("pri_pro", 1, Some("0.9")), ("pri_basic", -1, Some("0.9"))];
-        let upgrade = (20.0 * 3600.0 * 0.9) as i64;
+        let upgrade = ((PRO - BASIC) as f64 * 0.9) as i64;
         // 갱신 구독 이벤트 → 올리기 → 차액 거래 → (늦게 온) 갱신 거래
         let (db, b, uid, sig) = fixture();
         b.apply_event(&db, sub_event("a1", "subscription.activated", uid, &sig, "pri_basic", "2026-10-01T00:00:00Z", OCT)).await.unwrap();
@@ -1781,7 +1904,7 @@ mod tests {
         b.apply_event(&db, paid("a6", uid, &sig, "txn_nov", "subscription_recurring", &[("pri_basic", 1, None)], NOV)).await.unwrap();
         b.apply_event(&db, paid("a7", uid, &sig, "txn_nov", "subscription_recurring", &[("pri_basic", 1, None)], NOV)).await.unwrap();
         let r = row(&db, uid);
-        assert_eq!((r.start, r.included), (parse_rfc3339(NOV.0), 10 * 3600 + upgrade));
+        assert_eq!((r.start, r.included), (parse_rfc3339(NOV.0), BASIC + upgrade));
         assert_eq!(paid_start(&db, uid), parse_rfc3339(NOV.0));
 
         // 차액 거래가 갱신 웹훅보다 먼저: 다음 기간에 붙여 두었다가 그 기간이 시작되면 센다.
@@ -1790,15 +1913,15 @@ mod tests {
         b.apply_event(&db, paid("b2", uid, &sig, "txn_1", "web", &[("pri_basic", 1, None)], OCT)).await.unwrap();
         b.apply_event(&db, paid("b3", uid, &sig, "txn_up", "subscription_update", &up, UPN)).await.unwrap();
         let r = row(&db, uid);
-        assert_eq!((r.start, r.included), (parse_rfc3339(OCT.0), 10 * 3600), "October is untouched");
+        assert_eq!((r.start, r.included), (parse_rfc3339(OCT.0), BASIC), "October is untouched");
         b.apply_event(&db, sub_event("b4", "subscription.updated", uid, &sig, "pri_pro", "2026-11-01T00:00:00Z", NOV)).await.unwrap();
         assert_eq!(row(&db, uid).included, upgrade);
         b.apply_event(&db, paid("b5", uid, &sig, "txn_nov", "subscription_recurring", &[("pri_basic", 1, None)], NOV)).await.unwrap();
-        assert_eq!(row(&db, uid).included, 10 * 3600 + upgrade);
+        assert_eq!(row(&db, uid).included, BASIC + upgrade);
         // 그 차액을 돌려주면 차액만큼만 뺀다.
         let out = b.apply_event(&db, adjustment("b6", "adj_up", "refund", "approved", "txn_up", true, "1900")).await.unwrap();
         let r = row(&db, uid);
-        assert_eq!((r.plan.as_str(), r.included, out.revoked), ("pro", 10 * 3600, None));
+        assert_eq!((r.plan.as_str(), r.included, out.revoked), ("pro", BASIC, None));
     }
 
     #[tokio::test]
@@ -1809,7 +1932,7 @@ mod tests {
         b.apply_event(&db, sub_event("x3", "subscription.updated", uid, &sig, "pri_legacy", "2026-10-31T00:00:01Z", NOV)).await.unwrap();
         b.apply_event(&db, paid("x4", uid, &sig, "txn_nov", "subscription_recurring", &[("pri_legacy", 1, None)], NOV)).await.unwrap();
         let r = row(&db, uid);
-        assert_eq!((r.plan.as_str(), r.start, r.included), ("pro", parse_rfc3339(NOV.0), 30 * 3600));
+        assert_eq!((r.plan.as_str(), r.start, r.included), ("pro", parse_rfc3339(NOV.0), PRO));
         let recorded: i64 = db
             .blocking(|c| c.query_row("SELECT count(*) FROM paddle_transactions WHERE id = 'txn_nov'", [], |r| r.get(0)))
             .unwrap();
@@ -1830,7 +1953,7 @@ mod tests {
         b.apply_event(&db, first_payment).await.unwrap();
         b.apply_event(&db, paid("r4", uid, &sig, "txn_1nov", "subscription_recurring", &[("pri_basic", 1, None)], NOV)).await.unwrap();
         let r = row(&db, uid);
-        assert_eq!((r.sub.as_deref(), r.plan.as_str(), r.start, r.included), (Some("sub_2"), "pro", parse_rfc3339(P2.0), 30 * 3600));
+        assert_eq!((r.sub.as_deref(), r.plan.as_str(), r.start, r.included), (Some("sub_2"), "pro", parse_rfc3339(P2.0), PRO));
 
         // 차지백 뒤 다시 구독: 새 구독의 첫 결제가 구독 이벤트보다 먼저 와도 새 구독이 그 시간을 받는다.
         let (db, b, uid, sig) = fixture();
@@ -1849,7 +1972,7 @@ mod tests {
             .await
             .unwrap();
         let r = row(&db, uid);
-        assert_eq!((r.sub.as_deref(), r.plan.as_str(), r.included), (Some("sub_2"), "basic", 10 * 3600));
+        assert_eq!((r.sub.as_deref(), r.plan.as_str(), r.included), (Some("sub_2"), "basic", BASIC));
         assert_eq!(paid_start(&db, uid), parse_rfc3339(P3.0));
     }
 
@@ -1863,7 +1986,7 @@ mod tests {
         b.apply_event(&db, sub_event("l4", "subscription.updated", uid, &sig, "pri_pro", "2026-10-20T00:00:00Z", OCT)).await.unwrap();
         b.apply_event(&db, sub_event("l5", "subscription.updated", uid, &sig, "pri_pro", "2026-10-31T00:00:01Z", NOV)).await.unwrap();
         let r = row(&db, uid);
-        assert_eq!((r.start, r.included), (parse_rfc3339(NOV.0), 30 * 3600));
+        assert_eq!((r.start, r.included), (parse_rfc3339(NOV.0), PRO));
         assert_eq!(paid_start(&db, uid), parse_rfc3339(NOV.0));
 
         // 마이그레이션한 구독자(이번 달을 낸 기간으로 둠): 그보다 먼저 시작한 Paddle 기간은 지난달 사용량을 다시 세지 않고 낸 것으로 남는다.
@@ -1872,7 +1995,7 @@ mod tests {
         db.blocking(move |c| {
             c.execute(
                 "UPDATE users SET plan = 'pro', paddle_subscription_id = 'sub_1', paddle_event_at = 1, period_start = ?2, period_end = ?3,
-                   period_included = 108000, period_paid_start = ?2 WHERE id = ?1",
+                   period_included = 72000, period_paid_start = ?2 WHERE id = ?1",
                 params![uid, oct1, nov1],
             )
         })
@@ -1880,14 +2003,14 @@ mod tests {
         const PADDLE: (&str, &str) = ("2026-09-25T00:00:00Z", "2026-10-25T00:00:00Z");
         b.apply_event(&db, sub_event("m1", "subscription.updated", uid, &sig, "pri_pro", "2026-10-18T00:00:00Z", PADDLE)).await.unwrap();
         let r = row(&db, uid);
-        assert_eq!((r.start, r.included), (Some(oct1), 30 * 3600));
+        assert_eq!((r.start, r.included), (Some(oct1), PRO));
         assert_eq!(paid_start(&db, uid), Some(oct1));
         // 마이그레이션 뒤의 갱신은 결제가 끝나야 시간을 받는다.
         const NEXT: (&str, &str) = ("2026-10-25T00:00:00Z", "2026-11-25T00:00:00Z");
         b.apply_event(&db, sub_event("m2", "subscription.updated", uid, &sig, "pri_pro", "2026-10-25T00:00:01Z", NEXT)).await.unwrap();
         assert_eq!((row(&db, uid).start, row(&db, uid).included), (parse_rfc3339(NEXT.0), 0));
         b.apply_event(&db, paid("m3", uid, &sig, "txn_next", "subscription_recurring", &[("pri_pro", 1, None)], NEXT)).await.unwrap();
-        assert_eq!(row(&db, uid).included, 30 * 3600);
+        assert_eq!(row(&db, uid).included, PRO);
     }
 
     #[tokio::test]
@@ -1927,7 +2050,7 @@ mod tests {
         // 결제가 되면 시간이 생기고 active로 돌아온다.
         b.apply_event(&db, paid("p6", uid, &sig, "txn_nov", "subscription_recurring", &[("pri_pro", 1, None)], NOV)).await.unwrap();
         b.apply_event(&db, sub_event("p7", "subscription.updated", uid, &sig, "pri_pro", "2026-11-03T00:00:00Z", NOV)).await.unwrap();
-        assert_eq!((status(&db, uid).as_deref(), row(&db, uid).included), (Some("active"), 30 * 3600));
+        assert_eq!((status(&db, uid).as_deref(), row(&db, uid).included), (Some("active"), PRO));
         // 멈춤·이어 쓰기도 그 이벤트로 상태가 바뀐다.
         let mut paused = sub_event("p8", "subscription.paused", uid, &sig, "pri_pro", "2026-11-04T00:00:00Z", NOV);
         paused["data"]["status"] = json!("paused");
@@ -1961,7 +2084,7 @@ mod tests {
             b.apply_event(&db, sub_event("m1", "subscription.updated", uid, &sig, first, "2026-10-18T00:00:00Z", P)).await.unwrap();
             b.apply_event(&db, sub_event("m2", "subscription.updated", uid, &sig, "pri_basic", "2026-10-20T00:00:00Z", P)).await.unwrap();
             let r = row(&db, uid);
-            assert_eq!((r.plan.as_str(), r.start, r.included), ("basic", parse_rfc3339(P.0), 30 * 3600), "first event {first}");
+            assert_eq!((r.plan.as_str(), r.start, r.included), ("basic", parse_rfc3339(P.0), PRO), "first event {first}");
             assert_eq!(paid_start(&db, uid), parse_rfc3339(P.0));
         }
         // Basic으로 낸 기간에 Pro로 올리면 차액 거래의 몫만 더한다(한 번만).
@@ -1969,13 +2092,13 @@ mod tests {
         migrated(&db, uid, "basic", "2026-10-05T00:00:02Z");
         b.apply_event(&db, sub_event("u1", "subscription.updated", uid, &sig, "pri_basic", "2026-10-18T00:00:00Z", P)).await.unwrap();
         b.apply_event(&db, sub_event("u2", "subscription.updated", uid, &sig, "pri_pro", "2026-10-20T00:00:00Z", P)).await.unwrap();
-        assert_eq!(row(&db, uid).included, 10 * 3600);
+        assert_eq!(row(&db, uid).included, BASIC);
         let up = [("pri_pro", 1, Some("0.5")), ("pri_basic", -1, Some("0.5"))];
         b.apply_event(&db, paid("u3", uid, &sig, "txn_up", "subscription_update", &up, ("2026-10-20T00:00:00Z", P.1))).await.unwrap();
         let mut later = sub_event("u4", "subscription.updated", uid, &sig, "pri_pro", "2026-10-22T00:00:00Z", P);
         later["data"]["scheduled_change"] = json!({ "action": "cancel", "effective_at": P.1 });
         b.apply_event(&db, later).await.unwrap();
-        assert_eq!(row(&db, uid).included, 20 * 3600);
+        assert_eq!(row(&db, uid).included, HALF_UP);
     }
 
     #[tokio::test]
@@ -1997,7 +2120,7 @@ mod tests {
         created["data"]["id"] = json!("sub_2");
         b.apply_event(&db, created).await.unwrap();
         let r = row(&db, uid);
-        assert_eq!((r.plan.as_str(), r.sub.as_deref(), r.included), ("basic", Some("sub_2"), 10 * 3600));
+        assert_eq!((r.plan.as_str(), r.sub.as_deref(), r.included), ("basic", Some("sub_2"), BASIC));
         // 해지된 구독의 늦은 이벤트는 비어 있는 자리에 다시 들어오지 않는다.
         b.apply_event(&db, json!({ "event_id": "c7", "event_type": "subscription.canceled", "occurred_at": "2026-10-20T00:00:00Z",
                                    "data": { "id": "sub_2", "status": "canceled" } }))
@@ -2072,7 +2195,7 @@ mod tests {
                     b.apply_event(&db, events[i].clone()).await.unwrap();
                 }
                 let r = row(&db, uid);
-                if !(r.plan == "pro" && r.start == parse_rfc3339(OCT.0) && r.included == 20 * 3600 && paid_start(&db, uid) == r.start) {
+                if !(r.plan == "pro" && r.start == parse_rfc3339(OCT.0) && r.included == HALF_UP && paid_start(&db, uid) == r.start) {
                     bad.push(format!("{up_period:?} {order:?}: {r:?} paid={:?}", paid_start(&db, uid)));
                 }
             }
@@ -2084,7 +2207,7 @@ mod tests {
     async fn renewal_and_upgrade_in_any_arrival_order() {
         const UPN: (&str, &str) = ("2026-11-01T00:00:00Z", "2026-11-30T00:00:00Z");
         let up = [("pri_pro", 1, Some("0.9")), ("pri_basic", -1, Some("0.9"))];
-        let want = 10 * 3600 + (20.0 * 3600.0 * 0.9) as i64;
+        let want = BASIC + ((PRO - BASIC) as f64 * 0.9) as i64;
         let mut bad = vec![];
         for up_period in [UPN, NOV] {
             for order in orders(4) {
@@ -2125,7 +2248,7 @@ mod tests {
                 b.apply_event(&db, events[i].clone()).await.unwrap();
             }
             let r = row(&db, uid);
-            if !(r.plan == "basic" && r.start == parse_rfc3339(NOV.0) && r.included == 10 * 3600 && paid_start(&db, uid) == r.start) {
+            if !(r.plan == "basic" && r.start == parse_rfc3339(NOV.0) && r.included == BASIC && paid_start(&db, uid) == r.start) {
                 bad.push(format!("{order:?}: {r:?}"));
             }
         }
@@ -2158,7 +2281,7 @@ mod tests {
             if !(r.plan == "basic"
                 && r.sub.as_deref() == Some("sub_2")
                 && r.start == parse_rfc3339(P2.0)
-                && r.included == 10 * 3600
+                && r.included == BASIC
                 && paid_start(&db, uid) == r.start)
             {
                 bad.push(format!("{order:?}: {r:?} queue={:?}", queued(&db, "sub_2")));

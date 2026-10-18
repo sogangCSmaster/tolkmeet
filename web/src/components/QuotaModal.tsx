@@ -21,6 +21,8 @@ export function QuotaModal({ onClose }: { onClose: () => void }) {
   const hours = Math.round((billing?.includedSec ?? 0) / 3600)
   // 갱신 결제가 밀려 이번 기간의 포함 시간이 아직 없다: 다 쓴 것이 아니라 결제가 끝나면 들어온다.
   const unpaid = billing?.pastDue === true
+  // 구독이 없는 사람(일일권을 다 썼거나 회의 중에 끝남): 시간 추가(구독자 전용) 대신 일일권을 하나 더 사거나 구독한다.
+  const day = billing?.plan === 'day' || billing?.plan === 'none'
 
   function updatePayment() {
     // 이 탭을 떠나면 회의가 끊기므로 새 탭에서 연다. 응답을 기다린 뒤 열면 팝업 차단에 걸리므로 빈 탭부터 연다.
@@ -40,9 +42,17 @@ export function QuotaModal({ onClose }: { onClose: () => void }) {
       <span className="quota-ring" aria-hidden="true">
         {hours ? t('checkout.hours', { n: String(hours) }) : ''}
       </span>
-      <h2 id="quota-title">{t(unpaid ? 'billing.unpaid' : 'quota.title')}</h2>
+      <h2 id="quota-title">
+        {t(unpaid ? 'billing.unpaid' : billing?.plan === 'day' ? 'quota.dayTitle' : billing?.plan === 'none' ? 'quota.noneTitle' : 'quota.title')}
+      </h2>
       <p className="lead">
-        {unpaid ? t('billing.unpaidBody') : billing ? t('quota.body', { date: formatDate(billing.resetsAt, locale) }) : t('quota.bodyShort')}
+        {unpaid
+          ? t('billing.unpaidBody')
+          : day
+            ? t(billing?.plan === 'day' ? 'quota.dayBody' : 'quota.noneBody')
+            : billing
+              ? t('quota.body', { date: formatDate(billing.resetsAt, locale) })
+              : t('quota.bodyShort')}
       </p>
       {portalFailed && (
         <p className="form-error" role="alert">
@@ -55,14 +65,29 @@ export function QuotaModal({ onClose }: { onClose: () => void }) {
             <span>{t('checkout.updatePayment')}</span>
           </button>
         )}
-        <a className={`quota-option${unpaid ? '' : ' primary'}`} href="/checkout?item=hours&q=1" target="_blank" rel="noreferrer">
-          <span>{t('quota.addOne')}</span>
-          <b>$3</b>
-        </a>
-        <a className="quota-option" href="/checkout?item=hours&q=5" target="_blank" rel="noreferrer">
-          <span>{t('quota.addFive')}</span>
-          <b>$15</b>
-        </a>
+        {day ? (
+          <>
+            <a className="quota-option primary" href="/checkout?item=day" target="_blank" rel="noreferrer">
+              <span>{t('quota.dayAgain')}</span>
+              <b>{t('quota.dayPrice')}</b>
+            </a>
+            <a className="quota-option" href="/checkout?item=basic" target="_blank" rel="noreferrer">
+              <span>{t('quota.toBasic')}</span>
+              <b>{t('quota.basicPrice')}</b>
+            </a>
+          </>
+        ) : (
+          <>
+            <a className={`quota-option${unpaid ? '' : ' primary'}`} href="/checkout?item=hours&q=1" target="_blank" rel="noreferrer">
+              <span>{t('quota.addOne')}</span>
+              <b>$3</b>
+            </a>
+            <a className="quota-option" href="/checkout?item=hours&q=5" target="_blank" rel="noreferrer">
+              <span>{t('quota.addFive')}</span>
+              <b>$15</b>
+            </a>
+          </>
+        )}
         {/* 결제가 밀린 구독은 Paddle이 요금제를 바꾸지 않는다. */}
         {billing?.plan === 'basic' && !unpaid && (
           <a className="quota-option" href="/checkout?item=pro" target="_blank" rel="noreferrer">
