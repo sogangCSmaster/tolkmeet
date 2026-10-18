@@ -3,7 +3,7 @@
 // 스크립트는 맨 아래의 작은 로더 하나뿐이다(기능 카드의 장면 모듈을 필요할 때 불러온다).
 import type { Dict } from '../i18n/en'
 import Base from '../layouts/Base.astro'
-import { APP_URL, COMPANY, GITHUB_URL, legalLinks, LOCALES, SIGN_IN_URL, SIGNUP_URL, SITE_URL } from '../site'
+import { APP_URL, COMPANY, GITHUB_URL, legalLinks, LOCALES, PLAN_HOURS, SIGN_IN_URL, SIGNUP_URL, SITE_URL } from '../site'
 import Business from './Business.astro'
 import Gemini from './Gemini.astro'
 import Mark from './Mark.astro'
@@ -40,6 +40,7 @@ const privacyLines = t.privacyLines.map((l, k) => ({
   trWords: words(l.tr[1], k * 4, 0.035),
 }))
 const dots = Array.from({ length: 8 }, (_, i) => i)
+const hoursMax = Math.max(...Object.values(PLAN_HOURS))
 
 // 회사·사이트·앱을 @id로 이어 검색엔진이 한 브랜드로 묶게 한다(지식 패널·사이트 이름).
 const ORG_ID = `${SITE_URL}/#organization`
@@ -366,10 +367,15 @@ const jsonLd = [
       <p class="pricing-lead">{t.pricingLead}</p>
       <div class="plans">
         {t.plans.map((p, i) => (
-          <div class="plan">
+          <div class={`plan plan-${p.item}`}>
             <h3>{p.name}</h3>
             <p class="plan-price">{p.price}<span>{p.unit}</span></p>
-            <p class="plan-note">{p.note}</p>
+            {/* 시간 막대: 한 칸이 번역 회의 1시간. 가장 많은 요금제를 한 줄로 두고 모든 카드를 같은 눈금으로 그린다. */}
+            <div class="plan-hours" aria-hidden="true" style={`--n:${hoursMax}`}>
+              {Array.from({ length: hoursMax }, (_, k) => (k < PLAN_HOURS[p.item] ? <i class="on" style={`--i:${k}`}></i> : <i></i>))}
+            </div>
+            {/* 설명은 "시간 · 조건" 두 줄로 나눠 세 카드의 꼴을 맞춘다. */}
+            <p class="plan-note">{p.note.split(/\s*[·・]\s*/).map((part) => <span>{part}</span>)}</p>
             {/* 일일권은 결제 화면으로 바로 보낸다(로그인 전이면 앱이 가입부터 받고 돌아온다). */}
             <a class={`btn plan-cta ${i === 0 ? 'btn-cta' : 'btn-ink'}`} href={p.item === 'day' ? `${APP_URL}/checkout?item=day` : SIGNUP_URL}>{p.cta}</a>
           </div>
@@ -640,6 +646,20 @@ const jsonLd = [
         const io = new IntersectionObserver((es) => es.forEach((e) => (e.isIntersecting ? start : stop)(e.target as HTMLElement)), { threshold: 0.6 })
         cards.forEach((c) => io.observe(c))
       }
+    }
+
+    // 요금 카드의 시간 막대: 카드가 화면에 들어오면 칸이 차례로 찬다(움직임 줄이기 설정이면 처음부터 차 있다).
+    const plans = document.querySelectorAll<HTMLElement>('.plan')
+    if (plans.length && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      const io = new IntersectionObserver((es) => es.forEach((e) => {
+        if (!e.isIntersecting) return
+        e.target.classList.remove('hr-wait')
+        io.unobserve(e.target)
+      }), { threshold: 0.5 })
+      plans.forEach((p) => {
+        p.classList.add('hr-wait')
+        io.observe(p)
+      })
     }
   </script>
 </Base>

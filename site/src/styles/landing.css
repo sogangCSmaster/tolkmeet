@@ -442,13 +442,33 @@ a:hover { text-decoration: underline; }
 
 /* ── 요금 ── */
 .pricing-lead { margin: 14px 0 0; text-align: center; font-size: 21px; color: #6E6E73; }
-.plans { margin-top: 48px; display: flex; flex-wrap: wrap; gap: 16px; }
-.plan { flex: 1 1 320px; box-sizing: border-box; border-radius: 28px; background: #F5F5F7; padding: 36px; display: flex; flex-direction: column; gap: 10px; }
-.plan h3 { margin: 0; font-size: 24px; font-weight: 700; }
-.plan-price { margin: 6px 0 0; font-size: 56px; font-weight: 700; letter-spacing: -0.03em; }
+/* 넓은 화면은 늘 세 칸(2+1로 나뉘어 한 장만 넓게 늘어나지 않게), 860px 이하는 한 줄에 하나 */
+.plans { margin-top: 48px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.plan { box-sizing: border-box; border-radius: 28px; background: #F5F5F7; padding: 36px; display: flex; flex-direction: column; gap: 10px; transition: transform .5s cubic-bezier(.34,1.3,.5,1), box-shadow .5s; }
+/* 줄 높이를 숫자로 고정해 이름이 한글·일본어(대체 글꼴)여도 카드마다 막대·설명이 같은 높이에 온다 */
+.plan h3 { margin: 0; font-size: 24px; line-height: 1.2; font-weight: 700; }
+.plan-price { margin: 6px 0 0; font-size: 56px; line-height: 1.15; font-weight: 700; letter-spacing: -0.03em; }
 .plan-price span { font-size: 18px; font-weight: 500; color: #6E6E73; }
-.plan-note { margin: 0; font-size: 17px; color: #6E6E73; }
-.plan-cta { margin-top: 18px; align-self: flex-start; padding: 12px 24px; font-size: 17px; }
+.plan-note { margin: 0 0 8px; font-size: 17px; line-height: 1.45; color: #6E6E73; }
+.plan-note span { display: block; }
+/* 버튼은 카드 바닥에 붙어서, 설명이 몇 줄이든 세 카드에서 같은 높이에 온다 */
+.plan-cta { margin-top: auto; align-self: flex-start; padding: 12px 24px; font-size: 17px; }
+/* 시간 막대: 한 칸이 번역 회의 1시간. 카드가 화면에 들어오면 칸이 왼쪽부터 차례로 통통 튀며 차고
+   (스크립트가 hr-wait를 뗀다), 카드에 마우스를 올리면 찬 칸이 물결처럼 한 번 출렁인다. */
+.plan-hours { margin: 12px 0 6px; display: grid; grid-template-columns: repeat(var(--n), minmax(0, 1fr)); gap: 4px; height: 22px; }
+.plan-hours i { border-radius: 5px; background: #E3E3E8; }
+.plan-hours .on { background: #1D1D1F; transition: background-color .3s, transform .55s cubic-bezier(.34,1.56,.64,1); transition-delay: calc(var(--i) * 45ms); }
+.plan-basic .plan-hours .on { background: #F2542D; }
+.plan.hr-wait .plan-hours .on { background: #E3E3E8; transform: scaleY(.5); transition: none; }
+@keyframes hr-wave { 35% { transform: translateY(-5px) scaleY(1.15); } }
+@media (hover: hover) {
+  .plan:hover { transform: translateY(-4px); box-shadow: 0 28px 50px -30px rgba(0,0,0,0.28); }
+  .plan:hover .plan-hours .on { animation: hr-wave .6s cubic-bezier(.3,.7,.4,1) calc(var(--i) * 28ms); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .plan, .plan-hours .on { transition: none; }
+  .plan:hover .plan-hours .on { animation: none; }
+}
 .pricing-fine { margin: 24px 0 0; text-align: center; font-size: 15px; color: #6E6E73; }
 .pricing-more { margin-top: 8px; }
 .pricing-fine a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
@@ -515,12 +535,14 @@ a:hover { text-decoration: underline; }
 
 /* ── 좁은 화면 ── */
 @media (max-width: 1000px) {
+  .plan { padding: 28px; }
   .nav-in, .nav-links { column-gap: 24px; }
   /* 회의 타일이 세로로 길어져 칸을 넘지 않게 칸 높이에 맞춘다 */
   .vm-tile { align-self: stretch; aspect-ratio: auto; }
 }
 /* 머리: 두 줄. 윗줄은 로고와 언어·로그인·시작하기, 아랫줄은 구역 링크. */
 @media (max-width: 860px) {
+  .plans { grid-template-columns: minmax(0, 1fr); }
   .nav-in { height: auto; padding: 8px 16px 6px; justify-content: flex-end; gap: 4px 12px; }
   .nav-brand { margin-right: auto; }
   .nav-links { order: 1; flex: 1 1 100%; justify-content: center; flex-wrap: wrap; column-gap: 20px; }

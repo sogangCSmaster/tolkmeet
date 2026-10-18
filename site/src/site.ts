@@ -19,6 +19,9 @@ export const COMPANY = {
   email: 'support@tolkmeet.com',
 }
 
+/** 요금제마다 들어 있는 번역 회의 시간(서버 billing.rs와 같은 값). 요금 카드의 시간 막대가 같은 눈금으로 그린다. */
+export const PLAN_HOURS: Record<string, number> = { basic: 8, pro: 20, day: 3 }
+
 /** 언어 선택에 보이는 순서 */
 export const LOCALES: Dict[] = [en, ko, ja]
 
