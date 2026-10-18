@@ -11,9 +11,9 @@ export const SIGNUP_URL = `${APP_URL}/signup`
 export const GITHUB_URL = 'https://github.com/sogangCSmaster/tolkmeet'
 
 /** 운영 사업자(약관·처리방침 본문과 같은 값). 전화번호·통신판매업 신고번호는 받으면 더한다.
- *  상호는 어느 언어에서나 영문(Whisly), 대표·주소는 한국어 페이지만 한글이고 나머지는 영문으로 쓴다. */
+ *  상호는 어느 언어에서나 영문(Whistly), 대표·주소는 한국어 페이지만 한글이고 나머지는 영문으로 쓴다. */
 export const COMPANY = {
-  name: 'Whisly',
+  name: 'Whistly',
   regNo: '155-03-03588',
   email: 'support@tolkmeet.com',
 }
