@@ -5,7 +5,7 @@ import { en } from '../i18n/en'
 import { LOCALES } from '../site'
 import '../styles/site.css'
 ---
-<Base t={{ ...en, metaTitle: 'Page not found | Tolkmeet' }} noindex>
+<Base t={{ ...en, metaTitle: 'Page not found | Tolkmeet' }} ogAlt={en.metaTitle} noindex>
   <main class="wrap notfound">
     <a class="brand" href="/" aria-label="Tolkmeet"><Mark size={30} /><span>tolkmeet</span></a>
     <h1>This page doesn’t exist.</h1>

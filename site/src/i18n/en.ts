@@ -18,9 +18,9 @@ export const en = {
   path: '/',
   langName: 'English',
 
-  metaTitle: 'Tolkmeet: video meetings with live translated captions',
+  metaTitle: 'Tolkmeet: Video meetings with live translated captions',
   metaDescription:
-    'Everyone speaks their own language and reads everyone else in theirs. Tolkmeet turns each sentence into captions in the listener’s language as it is spoken. Korean, Japanese, English and more. Guests join from a link.',
+    'Video meetings where what you say appears as captions in each listener’s language as you speak. 9 languages, including English, Japanese and Korean. Guests join from a link.',
 
   skipToContent: 'Skip to content',
   navLabel: 'Main',

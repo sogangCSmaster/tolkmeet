@@ -11,11 +11,18 @@ interface Props {
   noindex?: boolean
   /** 밝은 화면만 쓰는 페이지(소개 페이지): 테마 스크립트 없이 data-theme="light"로 고정한다. */
   lightOnly?: boolean
+  /** 같은 페이지의 다른 언어판 [언어, 경로]. 첫 항목이 x-default다. 없으면 언어별 소개 페이지. */
+  alternates?: [string, string][]
+  /** og 이미지의 대체 텍스트. 이미지에 적힌 소개 문구(언어별 소개 페이지의 metaTitle)와 같게 둔다. */
+  ogAlt?: string
 }
 const { t, jsonLd = [], noindex = false, lightOnly = false } = Astro.props
+const ogAlt = Astro.props.ogAlt ?? t.metaTitle
+const alternates = Astro.props.alternates ?? LOCALES.map((l): [string, string] => [l.lang, l.path])
 const canonical = new URL(t.path, SITE_URL).href
 const ogImage = new URL(`/og-${t.lang}.png`, SITE_URL).href
-const ogLocale = { en: 'en_US', ko: 'ko_KR', ja: 'ja_JP' }[t.lang]
+const OG_LOCALE: Record<string, string> = { en: 'en_US', ko: 'ko_KR', ja: 'ja_JP' }
+const ogLocale = OG_LOCALE[t.lang]
 ---
 <!doctype html>
 <html lang={t.htmlLang} data-theme={lightOnly ? 'light' : undefined}>
@@ -40,8 +47,8 @@ const ogLocale = { en: 'en_US', ko: 'ko_KR', ja: 'ja_JP' }[t.lang]
     ) : (
       <>
         <link rel="canonical" href={canonical} />
-        {LOCALES.map((l) => <link rel="alternate" hreflang={l.lang} href={new URL(l.path, SITE_URL).href} />)}
-        <link rel="alternate" hreflang="x-default" href={new URL('/', SITE_URL).href} />
+        {alternates.map(([lang, path]) => <link rel="alternate" hreflang={lang} href={new URL(path, SITE_URL).href} />)}
+        <link rel="alternate" hreflang="x-default" href={new URL(alternates[0][1], SITE_URL).href} />
       </>
     )}
 
@@ -50,11 +57,16 @@ const ogLocale = { en: 'en_US', ko: 'ko_KR', ja: 'ja_JP' }[t.lang]
     <meta property="og:title" content={t.metaTitle} />
     <meta property="og:description" content={t.metaDescription} />
     <meta property="og:url" content={canonical} />
+    {/* 이미지는 scripts/og.mjs로 만든다(로고와 metaTitle의 소개 문구). */}
     <meta property="og:image" content={ogImage} />
+    <meta property="og:image:type" content="image/png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content={ogAlt} />
     <meta property="og:locale" content={ogLocale} />
+    {alternates.filter(([lang]) => lang !== t.lang).map(([lang]) => <meta property="og:locale:alternate" content={OG_LOCALE[lang]} />)}
     <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image:alt" content={ogAlt} />
 
     <link rel="icon" href="/favicon.ico" sizes="32x32" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />

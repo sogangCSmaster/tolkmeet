@@ -1,0 +1,3 @@
+# 앱은 막지 않고 열어 둔다: 크롤러가 index.html의 noindex를 읽어야 검색 결과에서 빠진다.
+User-agent: *
+Allow: /

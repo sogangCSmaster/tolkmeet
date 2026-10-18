@@ -41,16 +41,43 @@ const privacyLines = t.privacyLines.map((l, k) => ({
 }))
 const dots = Array.from({ length: 8 }, (_, i) => i)
 
+// 회사·사이트·앱을 @id로 이어 검색엔진이 한 브랜드로 묶게 한다(지식 패널·사이트 이름).
+const ORG_ID = `${SITE_URL}/#organization`
 const jsonLd = [
+  {
+    '@context': 'https://schema.org',
+    '@graph': [
+      {
+        '@type': 'Organization',
+        '@id': ORG_ID,
+        name: 'Tolkmeet',
+        legalName: COMPANY.name,
+        url: `${SITE_URL}/`,
+        logo: `${SITE_URL}/icon-512.png`,
+        email: COMPANY.email,
+        sameAs: [GITHUB_URL],
+      },
+      {
+        '@type': 'WebSite',
+        '@id': `${SITE_URL}/#website`,
+        name: 'Tolkmeet',
+        url: `${SITE_URL}/`,
+        inLanguage: LOCALES.map((l) => l.lang),
+        publisher: { '@id': ORG_ID },
+      },
+    ],
+  },
   {
     '@context': 'https://schema.org',
     '@type': 'SoftwareApplication',
     name: 'Tolkmeet',
     url: new URL(t.path, SITE_URL).href,
     description: t.metaDescription,
+    image: `${SITE_URL}/og-${t.lang}.png`,
     applicationCategory: 'CommunicationApplication',
     operatingSystem: 'Web browser',
     inLanguage: t.lang,
+    publisher: { '@id': ORG_ID },
     offers: t.plans.map((p) => ({ '@type': 'Offer', name: p.name, price: p.price.replace('$', ''), priceCurrency: 'USD', priceSpecification: { '@type': 'UnitPriceSpecification', price: p.price.replace('$', ''), priceCurrency: 'USD', unitCode: 'MON' } })),
   },
   {

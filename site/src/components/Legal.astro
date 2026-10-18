@@ -42,11 +42,11 @@ const ui = {
 const pages: Page[] = ['privacy', 'terms', 'refund']
 const href = (p: Page, l: Lang = lang) => (l === 'ko' ? `/ko/${p}/` : `/${p}/`)
 const otherHref = href(page, ui.other.lang as Lang)
-// Base는 hreflang 대안을 언어별 첫 페이지로 건다. 이 페이지들의 짝(영어·한국어)과 맞지 않으므로
-// noindex로 둔다(대표 주소·대안 링크도 함께 빠진다). 검색에 올리려면 Base에 대안 링크를 끄는 옵션부터 만든다.
+// 검색에 올린다. 언어 대안은 이 페이지의 영어·한국어 짝이고, 영어판이 x-default다.
 const t = { ...ui.dict, metaTitle, metaDescription, path: href(page) }
+const alternates: [string, string][] = [['en', href(page, 'en')], ['ko', href(page, 'ko')]]
 ---
-<Base t={t} noindex>
+<Base t={t} alternates={alternates} ogAlt={ui.dict.metaTitle}>
   <div class="legal">
     <a class="skip" href="#legal-main">{ui.dict.skipToContent}</a>
     <header>
