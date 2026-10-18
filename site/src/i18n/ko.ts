@@ -15,7 +15,7 @@ export const ko: Dict = {
   skipToContent: '본문으로 건너뛰기',
   navLabel: '주요 메뉴',
   navHow: '사용 장면',
-  navModes: '세 가지 자리',
+  navModes: '만나는 방식',
   navPrivacy: '개인정보 보호',
   navPricing: '요금',
   navFaq: '자주 묻는 질문',
@@ -77,7 +77,7 @@ export const ko: Dict = {
   contextA: ['ko', 'B부터요.'],
   contextTr: ['ja', 'Bからお願いします。'],
 
-  modesTitle: '세 가지 자리에서.',
+  modesTitle: '어디서 만나든.',
   modesLead: '온라인 회의든, 마주 앉은 상담이든, 회의실 한가운데든.',
   modeVideo: { eyebrow: '화상 회의', title1: '링크 하나로,', title2: '각자의 언어로.', body: '최대 4명. 받은 사람은 가입도 설치도 없이 브라우저로 들어옵니다.' },
   modeInPerson: { eyebrow: '대면 대화', title1: '휴대폰 하나를', title2: '사이에 두고.', body: '화면 반쪽씩 각자를 향하고, 상대의 말을 내 언어로 보여 줍니다.' },
@@ -172,7 +172,7 @@ export const ko: Dict = {
     { item: 'pro', name: 'Pro', price: '$49', unit: ' /월', note: '매달 번역 회의 20시간 · 언제든 해지', cta: 'Pro로 시작하기' },
     { item: 'day', name: '일일권', price: '$12', unit: ' /24시간', note: '24시간 안에 번역 회의 최대 3시간 · 한 번 결제, 구독 없음', cta: '일일권 사기' },
   ],
-  pricingFine: '모든 요금제: 세 가지 자리, 9개 언어, 자막 저장 포함. 구독자는 바쁜 달에 시간당 $3로 추가. 가격은 미국 달러, 세금 별도.',
+  pricingFine: '모든 요금제: 만나는 방식 세 가지 모두, 9개 언어, 자막 저장 포함. 구독자는 바쁜 달에 시간당 $3로 추가. 가격은 미국 달러, 세금 별도.',
   pricingDay: '일일권: 한 번 결제, 구독 없음. 결제 후 24시간 안에 최대 3시간을 쓰고, 그 뒤 남은 시간은 사라집니다. 다 쓰면 하나 더 살 수 있습니다.',
   pricingRefund: '환불은 결제 후 14일 안: 낸 금액에서 쓴 시간(시간당 $3)과 결제 처리 비용(5% + $0.50)을 뺀 나머지를 돌려드립니다.',
 

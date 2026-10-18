@@ -9,7 +9,7 @@ export type Pair = { src: Said; tr: Said }
 export type HistoryLine = Pair & { who: 'me' | 'other'; time: string }
 /** 개인정보 구역의 한 줄: 나타났다가 흩어져 사라지는 자막 */
 export type PrivacyLine = Pair & { who: 'me' | 'other' }
-/** 세 가지 자리 카드 */
+/** 만나는 방식 카드 */
 export type Mode = { eyebrow: string; title1: string; title2: string; body: string }
 
 export const en = {
@@ -105,7 +105,7 @@ export const en = {
     ['ja', 'まず弊社のサービスをご紹介します。'],
   ] as Said[],
   tabletNow: { src: ['ja', '予算について確認したいです。'], tr: ['en', 'I’d like to go over the budget.'] } as Pair,
-  // 세 가지 자리 카드에 마우스를 올리면 위의 정적 화면에서 이어지는 대화. 화상 회의는 대화 기록에 쌓이고,
+  // 만나는 방식 카드에 마우스를 올리면 위의 정적 화면에서 이어지는 대화. 화상 회의는 대화 기록에 쌓이고,
   // 대면 대화는 me의 말이 위쪽 반(상대 쪽)에, other의 말이 아래쪽 반(내 쪽)에 나오며, 자막 화면은 새 자막이 올라온다.
   liveVideo: [
     { who: 'me', time: '15:03', src: ['en', 'Sure. How about 2 p.m. on Thursday?'], tr: ['ja', 'はい、木曜日の午後2時はいかがですか？'] },

@@ -166,7 +166,7 @@ a:hover { text-decoration: underline; }
 .cs-tr { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; display: flex; align-items: center; gap: 10px; }
 .cs-tr i { flex: none; width: 12px; height: 4px; border-radius: 2px; background: #F2542D; }
 
-/* ── 세 가지 자리 ── */
+/* ── 만나는 방식 ── */
 .modes-lead { margin: 14px auto 0; max-width: 620px; text-align: center; line-height: 1.45; }
 .modes-grid { margin-top: 48px; display: flex; flex-wrap: wrap; gap: 16px; }
 .mode { box-sizing: border-box; border-radius: 30px; }
@@ -212,7 +212,7 @@ a:hover { text-decoration: underline; }
 .tb-src { font-size: 12px; color: #6E6E73; }
 .tablet .tb-tr { margin-top: 3px; font-size: 26px; line-height: 1.2; font-weight: 700; letter-spacing: -0.01em; }
 
-/* 세 가지 자리가 실제로 돌아가는 모습. Landing.astro의 작은 스크립트가 data-live-turns의 말을 한 마디씩 넣고 lv-* 상태만 붙인다.
+/* 만나는 방식 카드가 실제로 돌아가는 모습. Landing.astro의 작은 스크립트가 data-live-turns의 말을 한 마디씩 넣고 lv-* 상태만 붙인다.
    새 줄(lv-s)은 글자가 숨어 있다가, lv-on이 붙으면 --i번째 글자부터 차례로 흐림을 벗으며 나타난다. */
 .lv-s .lv-c { transition: opacity .35s cubic-bezier(.2,.8,.2,1), filter .35s cubic-bezier(.2,.8,.2,1); transition-delay: calc(var(--i) * var(--lv-step)); }
 .lv-s:not(.lv-on) .lv-c { opacity: 0; filter: blur(4px); transition: none; }
