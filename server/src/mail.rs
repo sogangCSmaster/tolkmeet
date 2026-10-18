@@ -386,6 +386,21 @@ impl Copy {
             text: text(&title, &lines, "", self.footer()),
         }
     }
+
+    /// 운영자에게: 오늘(UTC) 추정 지출이 상한을 넘어 자막을 멈췄다. `spent`·`limit`은 `$12.34` 꼴.
+    pub fn spend_alert(&self, to: &str, day: &str, spent: &str, limit: &str) -> Message {
+        let (subject, title, lines) = match self.lang {
+            Lang::Ko => (format!("Tolkmeet 하루 지출 상한 도달 ({day})"), "자막을 멈췄습니다".to_owned(), vec![format!("{day}(UTC) 추정 Gemini 지출 {spent}가 상한 {limit}을 넘어 모든 회의의 음성 인식·번역을 멈췄습니다. 영상·음성은 그대로입니다."), "다음 UTC 날짜(한국 시간 오전 9시)에 저절로 풀립니다. 더 일찍 풀려면 DAILY_SPEND_LIMIT_USD를 올리고 서버를 다시 시작하세요.".to_owned()]),
+            Lang::Ja => (format!("Tolkmeet 1日の支出上限に到達 ({day})"), "字幕を停止しました".to_owned(), vec![format!("{day}(UTC)の推定 Gemini 支出 {spent} が上限 {limit} を超えたため、すべての会議の音声認識・翻訳を停止しました。映像・音声はそのままです。"), "次の UTC 日付(日本時間午前9時)に自動で再開します。早く再開するには DAILY_SPEND_LIMIT_USD を上げてサーバーを再起動してください。".to_owned()]),
+            Lang::En => (format!("Tolkmeet daily spend limit reached ({day})"), "Captions are paused".to_owned(), vec![format!("Estimated Gemini spend for {day} (UTC) is {spent}, over the {limit} limit, so speech recognition and translation are paused in every meeting. Video and audio keep going."), "They come back on their own at the next UTC day. To resume sooner, raise DAILY_SPEND_LIMIT_USD and restart the server.".to_owned()]),
+        };
+        Message {
+            to: to.to_owned(),
+            subject,
+            html: layout(&title, &lines, None, None, self.footer()),
+            text: text(&title, &lines, "", self.footer()),
+        }
+    }
 }
 
 #[cfg(test)]

@@ -65,6 +65,8 @@ function Live({ code }: { code: string }) {
   // 번역 시간이 떨어지면 듣지 않는다(AutoTalk). 시간을 추가하면 서버 알림으로 다시 듣는다.
   const [outOfTime, setOutOfTime] = useState(false)
   const [quotaClosed, setQuotaClosed] = useState(false)
+  // 서비스 전체가 오늘 지출 상한에 닿아 듣지 않는다. 다음 UTC 날짜에 서버 알림으로 다시 듣는다.
+  const [spendPaused, setSpendPaused] = useState(false)
   const [transcript] = useState(() => new Transcript())
   const [hasTranscript, setHasTranscript] = useState(false)
   const talkRef = useRef<AutoTalk | null>(null)
@@ -109,6 +111,7 @@ function Live({ code }: { code: string }) {
         setOutOfTime(out)
         if (!out) setQuotaClosed(false)
       },
+      onSpendPaused: setSpendPaused,
       onFailed: (reason) => setFailure(FAILURES[reason] ?? 'room.cannotJoin'),
     })
     talk.setListening(listeningRef.current)
@@ -203,7 +206,9 @@ function Live({ code }: { code: string }) {
       ? 'talk.connecting'
       : outOfTime
         ? 'quota.title'
-        : !hearing
+        : spendPaused
+          ? 'room.spendPaused'
+          : !hearing
           ? 'live.paused'
           : stt === 'unavailable'
             ? 'captions.sttUnavailable'

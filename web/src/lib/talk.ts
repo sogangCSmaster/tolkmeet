@@ -18,6 +18,8 @@ export type TalkEvents = {
   onSttStatus: (status: SttStatus | null) => void
   /** 주최자의 번역 시간이 떨어졌다(true) / 다시 생겼다(false). 그동안 음성 인식을 멈춘다. */
   onQuota: (outOfTime: boolean) => void
+  /** 서비스 전체가 오늘 지출 상한에 닿았다(true) / 풀렸다(false). 그동안 음성 인식을 멈춘다. */
+  onSpendPaused: (paused: boolean) => void
   /** 입장 실패·연결 끊김. 이 연결은 이미 닫혔다. 다시 시도하려면 새로 만든다. */
   onFailed: (reason: TalkFailure) => void
 }
@@ -39,6 +41,7 @@ export class TalkSide {
   private closed = false
   private joined = false
   private outOfTime = false
+  private spendPaused = false
   private track: MediaStreamTrack | null
   private events: TalkEvents
 
@@ -106,12 +109,15 @@ export class TalkSide {
         this.joined = true
         // 새 연결은 막히지 않은 상태로 시작한다. 화면의 지난 상태(다시 연결하기 전)를 지우고, 아직 막혀 있으면 서버가 입장 직후 다시 알린다.
         this.events.onQuota(false)
+        this.events.onSpendPaused(false)
         this.events.onJoined(msg.you)
         this.startSpeech()
         break
       case 'notice':
-        if (msg.code === 'quota_exceeded') this.setOutOfTime(true)
-        else if (msg.code === 'quota_restored') this.setOutOfTime(false)
+        if (msg.code === 'quota_exceeded') this.setBlocked('quota', true)
+        else if (msg.code === 'quota_restored') this.setBlocked('quota', false)
+        else if (msg.code === 'spend_limit') this.setBlocked('spend', true)
+        else if (msg.code === 'spend_restored') this.setBlocked('spend', false)
         break
       case 'caption':
         this.events.onCaption(msg)
@@ -135,13 +141,15 @@ export class TalkSide {
     }
   }
 
-  /** 번역 시간이 떨어지면 음성 인식을 멈추고(세션을 열어 둬도 자막이 나오지 않는다), 다시 생기면 다시 시작한다. */
-  private setOutOfTime(out: boolean) {
-    if (this.outOfTime === out || this.closed) return
-    this.outOfTime = out
-    if (out) this.stopSpeech()
+  /** 번역 시간이 떨어지거나 지출 상한으로 멈추면 음성 인식을 멈추고(세션을 열어 둬도 자막이 나오지 않는다), 둘 다 풀리면 다시 시작한다. */
+  private setBlocked(kind: 'quota' | 'spend', on: boolean) {
+    if ((kind === 'quota' ? this.outOfTime : this.spendPaused) === on || this.closed) return
+    if (kind === 'quota') this.outOfTime = on
+    else this.spendPaused = on
+    if (on) this.stopSpeech()
     else if (this.joined) this.startSpeech()
-    this.events.onQuota(out)
+    if (kind === 'quota') this.events.onQuota(on)
+    else this.events.onSpendPaused(on)
   }
 
   private fail(reason: TalkFailure) {
@@ -168,7 +176,7 @@ export class TalkSide {
   }
 
   private startSpeech() {
-    if (this.speech || !this.track || this.outOfTime) return
+    if (this.speech || !this.track || this.outOfTime || this.spendPaused) return
     this.speech = startSpeech({
       track: this.track,
       lang: this.lang,

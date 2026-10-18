@@ -247,6 +247,7 @@ const en = {
   'room.camEnded': 'Your camera was disconnected. Turn it on again to reconnect.',
   'room.deviceRetry': 'Couldn’t reconnect. Check the device or the browser permission, then try again.',
   'room.hostAway': 'Captions paused: the host has left. They come back when the host returns.',
+  'room.spendPaused': 'Captions are paused: Tolkmeet reached today’s usage limit. Video and audio keep going. Captions come back after midnight UTC.',
 } as const
 
 type CoreKey = keyof typeof en
@@ -492,6 +493,7 @@ const ko: Messages = {
   'room.camEnded': '카메라 연결이 끊겼어요. 다시 켜면 연결해 볼게요.',
   'room.deviceRetry': '다시 연결하지 못했어요. 장치나 브라우저 권한을 확인한 뒤 다시 켜 주세요.',
   'room.hostAway': '주최자가 자리를 비워 자막이 멈췄어요. 주최자가 돌아오면 다시 켜져요.',
+  'room.spendPaused': 'Tolkmeet이 오늘 사용 한도에 도달해 자막이 멈췄어요. 영상과 음성은 계속돼요. 자막은 UTC 자정(한국 시간 오전 9시) 뒤에 다시 켜져요.',
 
 }
 
@@ -734,6 +736,7 @@ const ja: Messages = {
   'room.camEnded': 'カメラの接続が切れました。もう一度オンにすると再接続します。',
   'room.deviceRetry': '再接続できませんでした。デバイスまたはブラウザの許可を確認して、もう一度オンにしてください。',
   'room.hostAway': '主催者が退出したため、字幕が止まりました。主催者が戻ると再開します。',
+  'room.spendPaused': 'Tolkmeet が本日の利用上限に達したため、字幕が止まりました。映像と音声はそのまま続きます。字幕は UTC 0時(日本時間午前9時)以降に再開します。',
 
 }
 

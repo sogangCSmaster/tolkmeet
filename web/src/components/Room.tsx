@@ -102,6 +102,8 @@ export function Room({ code, local, prefs, media, onPrefsChange, onMediaChange, 
   const [quotaClosed, setQuotaClosed] = useState(false)
   // 주최자가 오래 자리를 비워 서버가 음성 인식·번역을 멈췄다(주최자의 시간을 쓰지 않게). 돌아오면 서버가 알린다.
   const [hostAway, setHostAway] = useState(false)
+  // 서비스 전체가 오늘 지출 상한에 닿아 서버가 음성 인식·번역을 멈췄다. 다음 UTC 날짜에 서버가 알린다.
+  const [spendPaused, setSpendPaused] = useState(false)
   // 화면 공유 중 자막 창(Document PiP). 공유를 시작한 클릭 안에서 바로 열어 보고, 막히면 버튼으로 연다.
   const pip = usePipWindow(`Tolkmeet · ${t('history.title')}`)
   const pipOpenRef = useRef(pip.open)
@@ -210,6 +212,7 @@ export function Room({ code, local, prefs, media, onPrefsChange, onMediaChange, 
           // 끊긴 사이 놓친 알림이 있을 수 있어 새로 시작한다. 아직 막혀 있으면 서버가 입장 직후 다시 알린다.
           setOutOfTime(false)
           setHostAway(false)
+          setSpendPaused(false)
           setStatus({ kind: 'joined', selfId: msg.you })
           setIsHost(msg.host)
           setSettings(msg.settings)
@@ -276,6 +279,11 @@ export function Room({ code, local, prefs, media, onPrefsChange, onMediaChange, 
             setToast({ key: 'quota.restored' })
           }
           else if (msg.code === 'host_away') setHostAway(true)
+          else if (msg.code === 'spend_limit') setSpendPaused(true)
+          else if (msg.code === 'spend_restored') {
+            setSpendPaused(false)
+            setToast({ key: 'quota.restored' })
+          }
           else if (msg.code === 'host_back') {
             setHostAway(false)
             setToast({ key: 'quota.restored' })
@@ -492,7 +500,7 @@ export function Room({ code, local, prefs, media, onPrefsChange, onMediaChange, 
   const micTrack = local.getAudioTracks()[0] ?? null
   // 내 말은 내 브라우저가 직접 인식한다. 번역이 켜진 방에 입장해 있는 동안만.
   // 주최자의 번역 시간이 떨어지거나 주최자가 오래 없으면 음성 인식을 멈추고, 풀리면(서버 알림) 효과가 다시 켠다.
-  const sttEnabled = joined && !disconnected && settings.translation && !!micTrack && !outOfTime && !hostAway
+  const sttEnabled = joined && !disconnected && settings.translation && !!micTrack && !outOfTime && !hostAway && !spendPaused
 
   useEffect(() => {
     const sig = sigRef.current
@@ -855,7 +863,12 @@ export function Room({ code, local, prefs, media, onPrefsChange, onMediaChange, 
             {t('quota.guest')}
           </div>
         )}
-        {hostAway && !outOfTime && (
+        {spendPaused && (
+          <div className="toast" role="status">
+            {t('room.spendPaused')}
+          </div>
+        )}
+        {hostAway && !outOfTime && !spendPaused && (
           <div className="toast" role="status">
             {t('room.hostAway')}
           </div>

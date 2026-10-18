@@ -64,6 +64,8 @@ function Talk({ code }: { code: string }) {
   // 번역 시간이 떨어지면 음성 인식이 멈춘다(TalkSide). 시간을 추가하면 서버 알림으로 다시 켜진다.
   const [outOfTime, setOutOfTime] = useState(false)
   const [quotaClosed, setQuotaClosed] = useState(false)
+  // 서비스 전체가 오늘 지출 상한에 닿아 음성 인식이 멈췄다. 다음 UTC 날짜에 서버 알림으로 다시 켜진다.
+  const [spendPaused, setSpendPaused] = useState(false)
   // 실패하면 두 연결과 마이크를 모두 정리한다(실패 화면 뒤에서 계속 듣거나 회의에 남지 않게).
   const live = failure === null
   // 마이크 권한을 다시 요청할 때 올린다.
@@ -116,6 +118,7 @@ function Talk({ code }: { code: string }) {
           setOutOfTime(out)
           if (!out) setQuotaClosed(false)
         },
+        onSpendPaused: setSpendPaused,
         onFailed: (reason) => setFailure(FAILURES[reason] ?? 'room.cannotJoin'),
       })
     const sides = { near: open('near', 'far'), far: open('far', 'near') }
@@ -225,6 +228,7 @@ function Talk({ code }: { code: string }) {
       micError={micError}
       sttStatus={stt[side]}
       outOfTime={outOfTime}
+      spendPaused={spendPaused}
       rotated={side === 'far' && rotated}
       onLang={(l) => changeLang(side, l)}
       onTalk={() => setActive((a) => (a === side ? null : side))}
@@ -277,13 +281,14 @@ type HalfProps = {
   micError: boolean
   sttStatus: SttStatus | null
   outOfTime: boolean
+  spendPaused: boolean
   rotated: boolean
   onLang: (lang: string) => void
   onTalk: () => void
 }
 
 /** 한 사람의 화면. 상대 말은 내 언어 번역을 크게, 내 말은 원문을 크게 보인다. */
-function TalkHalf({ side, lang, selfId, captions, speaking, ready, micError, sttStatus, outOfTime, rotated, onLang, onTalk }: HalfProps) {
+function TalkHalf({ side, lang, selfId, captions, speaking, ready, micError, sttStatus, outOfTime, spendPaused, rotated, onLang, onTalk }: HalfProps) {
   const { t: uiT } = useI18n()
   // 맞은편 사람은 화면 언어를 못 읽을 수 있다. 그 사람 언어로 된 문구가 있으면 그것으로 보인다.
   const own = LOCALES.find((l) => l.code === lang)?.code
@@ -299,9 +304,9 @@ function TalkHalf({ side, lang, selfId, captions, speaking, ready, micError, stt
     <section className={`talk-half ${side}${rotated ? ' rotated' : ''}`} lang={lang} aria-label={languageName(lang)}>
       <div className="talk-head">
         <Select ariaLabel={t('lang.mine')} value={lang} options={LANG_OPTIONS} onChange={onLang} variant="pill" icon="language" alwaysDown />
-        {outOfTime ? (
+        {outOfTime || spendPaused ? (
           <span className="talk-status" role="status">
-            {t('quota.title')}
+            {t(outOfTime ? 'quota.title' : 'room.spendPaused')}
           </span>
         ) : (
           (sttStatus === 'paused' || sttStatus === 'unavailable') && (
@@ -340,7 +345,7 @@ function TalkHalf({ side, lang, selfId, captions, speaking, ready, micError, stt
       <button
         className={`talk-button${speaking ? ' on' : ''}`}
         onClick={onTalk}
-        disabled={!ready || outOfTime}
+        disabled={!ready || outOfTime || spendPaused}
       >
         <Icon name="mic" />
         {speaking ? t('talk.listening') : t('talk.tapToSpeak')}

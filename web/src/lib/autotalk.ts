@@ -16,6 +16,8 @@ export type AutoTalkEvents = {
   onSttStatus: (status: SttStatus | null) => void
   /** 주최자의 번역 시간이 떨어졌다(true) / 다시 생겼다(false). 그동안 듣지 않는다. */
   onQuota: (outOfTime: boolean) => void
+  /** 서비스 전체가 오늘 지출 상한에 닿았다(true) / 풀렸다(false). 그동안 듣지 않는다. */
+  onSpendPaused: (paused: boolean) => void
   onFailed: (reason: TalkFailure) => void
 }
 
@@ -32,7 +34,10 @@ export class AutoTalk {
   private closed = false
   /** 연결마다 따로 받은 번역 시간 상태. 어느 한쪽이라도 막혔으면 듣지 않는다. */
   private blocked = { a: false, b: false }
-  private outOfTime = false
+  /** 연결마다 따로 받은 지출 상한 상태 */
+  private spend = { a: false, b: false }
+  /** 번역 시간이나 지출 상한으로 막혀 듣지 않는 중 */
+  private paused = false
   // 두 연결이 구간 번호를 나눠 쓴다. 각 연결에서는 늘어나기만 하면 된다(건너뛰어도 된다).
   private seg: SegCounter = { next: 0 }
   /** 진행 중인 발화(구간)를 지금 어느 쪽으로 보내고 있는지. 확실한 판단이 바뀌면 옮긴다. */
@@ -56,7 +61,8 @@ export class AutoTalk {
         onSttStatus: () => {},
         // 두 연결이 같은 알림을 따로 받는다. 연결마다 기억해 두고 합쳐서 판단한다
         // (뒤에 들어온 쪽의 입장 직후 상태(false)가 먼저 막힌 쪽을 풀지 않게).
-        onQuota: (out) => this.setOutOfTime(s, out),
+        onQuota: (out) => this.setBlocked(s, 'quota', out),
+        onSpendPaused: (on) => this.setBlocked(s, 'spend', on),
         onFailed: (reason) => {
           if (this.closed) return
           this.close()
@@ -93,12 +99,14 @@ export class AutoTalk {
     this.events.onSttStatus(null)
   }
 
-  private setOutOfTime(side: Side, blocked: boolean) {
+  private setBlocked(side: Side, kind: 'quota' | 'spend', on: boolean) {
     if (this.closed) return
-    this.blocked[side] = blocked
-    const out = this.blocked.a || this.blocked.b
-    if (this.outOfTime !== out) {
-      this.outOfTime = out
+    ;(kind === 'quota' ? this.blocked : this.spend)[side] = on
+    const quota = this.blocked.a || this.blocked.b
+    const spend = this.spend.a || this.spend.b
+    const out = quota || spend
+    if (this.paused !== out) {
+      this.paused = out
       if (out) {
         this.speech?.close()
         this.speech = null
@@ -106,11 +114,12 @@ export class AutoTalk {
       } else if (this.joined.a && this.joined.b) this.startSpeech()
     }
     // 같은 값이어도 알린다: 새로 연결한 쪽의 처음 상태(false)로 화면의 지난 상태를 지운다.
-    this.events.onQuota(out)
+    if (kind === 'quota') this.events.onQuota(quota)
+    else this.events.onSpendPaused(spend)
   }
 
   private startSpeech() {
-    if (this.speech || this.closed || this.outOfTime) return
+    if (this.speech || this.closed || this.paused) return
     this.speech = startSpeech({
       track: this.track,
       lang: `${this.langs.a}|${this.langs.b}`,

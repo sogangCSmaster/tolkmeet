@@ -233,6 +233,14 @@ const MIGRATIONS: &[&str] = &[
          transaction_id TEXT PRIMARY KEY,
          created_at INTEGER NOT NULL
      );",
+    // 15: Gemini 사용량(UTC 날짜·종류별 합계). 하루 지출 상한(`spend`)과 운영자 로그에 쓴다.
+    //     종류: stt_seconds, translate_lang_seconds, input_tokens, output_tokens, stt_sessions, alerted(상한 알림 메일 보냄)
+    "CREATE TABLE gemini_usage (
+         day TEXT NOT NULL,
+         kind TEXT NOT NULL,
+         amount INTEGER NOT NULL,
+         PRIMARY KEY (day, kind)
+     ) WITHOUT ROWID;",
 ];
 
 impl Db {

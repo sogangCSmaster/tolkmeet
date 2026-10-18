@@ -99,6 +99,10 @@ Server environment variables:
 | `GEMINI_API_KEY` | (none) | Translation API key (server only, never sent to browsers). If empty, captions show the original only |
 | `GEMINI_TRANSLATE_MODEL` | `gemini-3.5-flash-lite` | Translation model |
 | `GEMINI_STT_MODEL` | `gemini-3.5-transcribe-live` | Speech recognition model, locked into each browser token |
+| `DAILY_SPEND_LIMIT_USD` | (none: off) | Daily (UTC) cap on estimated Gemini spend. Once today's estimate reaches it, new speech-recognition tokens and translation stop in every meeting (video and audio keep going, people see a notice), operator accounts get one email, and captions come back at the next UTC day. Usage is kept per day in the `gemini_usage` table and each day's total is logged as `daily Gemini usage`. Speech sessions already open keep running up to 15 minutes after the pause if a client ignores the notice, so leave some headroom |
+| `GEMINI_PRICE_STT_PER_MIN` | `0.009` | Estimated speech-recognition cost (USD) per metered speaking minute. The server can't see the browser's audio tokens, so it uses the metered translation time |
+| `GEMINI_PRICE_TRANSLATE_PER_MIN` | `0.003` | Estimated translation cost (USD) per speaking minute per target language. The larger of this and the token-based cost below is used |
+| `GEMINI_PRICE_INPUT_PER_MTOK` / `GEMINI_PRICE_OUTPUT_PER_MTOK` | `0.40` / `2.00` | Translation price (USD) per million input / output (incl. thinking) tokens, read from each response's `usageMetadata` |
 | `TRUSTED_PROXY` | (unset) | Set to `1` only behind a reverse proxy (Caddy) that sets `X-Forwarded-For`; login throttling then uses its last hop as the client IP. Otherwise the socket peer address is used |
 | `APP_ORIGIN` | `http://localhost:5173` in dev, `https://meet.tolkmeet.com` otherwise | Public address of the app (e.g. `https://meet.tolkmeet.com`). Used for links in emails, passkeys and the Google redirect URI |
 | `DATABASE_PATH` | `server/data/dev.db` in dev, `server/data/tolkmeet.db` otherwise (build-time path; set it explicitly in production) | SQLite file (accounts, sessions, meetings, usage) |

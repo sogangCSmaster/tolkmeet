@@ -2,6 +2,7 @@
 //! `gemini-3.5-flash-lite` + `thinkingLevel: minimal`, 유료 Standard에서 첫 토큰 p50 1.0s.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::StreamExt;
@@ -9,6 +10,7 @@ use futures_util::stream::{self, BoxStream};
 use serde_json::{Value, json};
 
 use super::{TranslateError, TranslateRequest, Translator, language_name};
+use crate::spend::TokenMeter;
 
 const API: &str = "https://generativelanguage.googleapis.com/v1beta";
 pub const DEFAULT_MODEL: &str = "gemini-3.5-flash-lite";
@@ -21,10 +23,12 @@ pub struct Gemini {
     client: reqwest::Client,
     key: String,
     model: String,
+    /// 응답의 토큰 사용량을 여기에 더한다(하루 지출 추정).
+    meter: Arc<TokenMeter>,
 }
 
 impl Gemini {
-    pub fn new(key: String, model: String) -> Self {
+    pub fn new(key: String, model: String, meter: Arc<TokenMeter>) -> Self {
         let client = reqwest::Client::builder()
             // TLS 연결 수립(약 0.1s)을 요청마다 반복하지 않도록 연결을 오래 살려 둔다.
             .pool_idle_timeout(None)
@@ -33,7 +37,7 @@ impl Gemini {
             .connect_timeout(Duration::from_secs(5))
             .build()
             .expect("reqwest client");
-        Gemini { client, key, model }
+        Gemini { client, key, model, meter }
     }
 
     /// 같은 호스트로 가는 다른 요청(음성 인식 토큰)이 열린 연결을 재사용하도록 공유한다.
@@ -94,7 +98,7 @@ impl Gemini {
 }
 
 enum State {
-    Start(reqwest::RequestBuilder),
+    Start(reqwest::RequestBuilder, Arc<TokenMeter>),
     Body {
         bytes: BoxStream<'static, reqwest::Result<bytes::Bytes>>,
         decoder: SseDecoder,
@@ -116,11 +120,11 @@ impl Translator for Gemini {
             .header("x-goog-api-key", &self.key)
             .timeout(Duration::from_secs(30))
             .json(&Self::body(&req));
-        stream::unfold(State::Start(request), |mut state| async move {
+        stream::unfold(State::Start(request, self.meter.clone()), |mut state| async move {
             loop {
                 match state {
                     State::Done => return None,
-                    State::Start(request) => {
+                    State::Start(request, meter) => {
                         let res = match request.send().await {
                             Ok(res) => res,
                             Err(err) => return Some((Err(error(err)), State::Done)),
@@ -132,7 +136,7 @@ impl Translator for Gemini {
                         }
                         state = State::Body {
                             bytes: res.bytes_stream().boxed(),
-                            decoder: SseDecoder::default(),
+                            decoder: SseDecoder::metered(meter),
                         };
                     }
                     State::Body {
@@ -173,9 +177,27 @@ struct SseDecoder {
     buf: Vec<u8>,
     ready: VecDeque<String>,
     finished: bool,
+    /// 지금까지 받은 마지막 `usageMetadata`(입력, 출력+생각). 매 이벤트에 누적값으로 온다.
+    usage: Option<(u64, u64)>,
+    meter: Option<Arc<TokenMeter>>,
+}
+
+impl Drop for SseDecoder {
+    /// 끝까지 받았든, 실패했든, 헤징에서 져서 버려졌든 본 사용량은 한 번 기록한다.
+    fn drop(&mut self) {
+        if let (Some(meter), Some((input, output))) = (&self.meter, self.usage) {
+            meter.add(input, output);
+        }
+    }
 }
 
 impl SseDecoder {
+    fn metered(meter: Arc<TokenMeter>) -> Self {
+        let mut d = SseDecoder::default();
+        d.meter = Some(meter);
+        d
+    }
+
     fn push(&mut self, chunk: &[u8]) -> Result<(), TranslateError> {
         self.buf.extend_from_slice(chunk);
         while let Some((end, sep)) = find_event_end(&self.buf) {
@@ -193,6 +215,13 @@ impl SseDecoder {
             }
             let value: Value = serde_json::from_str(&data)
                 .map_err(|_| TranslateError("invalid translation event JSON".into()))?;
+            if let Some(u) = value.get("usageMetadata") {
+                let count = |k: &str| u.get(k).and_then(Value::as_u64).unwrap_or(0);
+                self.usage = Some((
+                    count("promptTokenCount"),
+                    count("candidatesTokenCount") + count("thoughtsTokenCount"),
+                ));
+            }
             if value.get("error").is_some()
                 || value.pointer("/promptFeedback/blockReason").is_some()
             {
@@ -314,6 +343,20 @@ mod tests {
             let err = decoder.push(&tail).unwrap_err();
             assert!(!err.0.contains("private source text"));
         }
+    }
+
+    #[test]
+    fn usage_is_recorded_once_even_when_the_stream_is_dropped() {
+        let meter = Arc::new(TokenMeter::default());
+        let mut decoder = SseDecoder::metered(meter.clone());
+        let usage = |out: u64| json!({"promptTokenCount": 97, "candidatesTokenCount": out, "thoughtsTokenCount": 1});
+        decoder
+            .push(&event(json!({"candidates": [{"content": {"parts": [{"text": "Hi"}]}}], "usageMetadata": usage(5)})))
+            .unwrap();
+        // 누적값이라 마지막 것만 센다.
+        decoder.push(&event(json!({"candidates": [{"finishReason": "STOP"}], "usageMetadata": usage(19)}))).unwrap();
+        drop(decoder);
+        assert_eq!(meter.take(), (97, 20));
     }
 
     #[test]

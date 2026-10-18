@@ -1687,6 +1687,7 @@ mod tests {
                 code: "abcd-efgh-ijkm".into(),
                 seconds: s,
                 peak: 2,
+                langs: 2,
             }]
         };
         // 포함된 시간에서 1분 덜 쓰기 → 아직 남음
@@ -1734,7 +1735,7 @@ mod tests {
     }
 
     fn metered(uid: i64, seconds: i64) -> Vec<Metered> {
-        vec![Metered { host: uid.to_string(), code: "abcd-efgh-ijkm".into(), seconds, peak: 1 }]
+        vec![Metered { host: uid.to_string(), code: "abcd-efgh-ijkm".into(), seconds, peak: 1, langs: 1 }]
     }
 
     #[test]

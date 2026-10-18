@@ -13,6 +13,7 @@ mod pipeline;
 mod protocol;
 mod providers;
 mod room;
+mod spend;
 mod ws;
 
 use std::io::BufRead;
@@ -44,6 +45,8 @@ pub(crate) struct AppState {
     pub(crate) accounts: Arc<account::Accounts>,
     /// Paddle 결제. 키가 없으면 None.
     pub(crate) billing: Option<Arc<billing::Billing>>,
+    /// Gemini 하루 지출 기록·차단기
+    pub(crate) spend: Arc<spend::Budget>,
     /// `tolkmeet-server dev`(로컬 개발)
     pub(crate) dev_mode: bool,
     /// 로컬 http 개발에서만 false. 운영(https)에서는 반드시 true.
@@ -67,6 +70,12 @@ impl FromRef<AppState> for Arc<Pipeline> {
 impl FromRef<AppState> for Option<Arc<dyn SttTokens>> {
     fn from_ref(state: &AppState) -> Self {
         state.stt.clone()
+    }
+}
+
+impl FromRef<AppState> for Arc<spend::Budget> {
+    fn from_ref(state: &AppState) -> Self {
+        state.spend.clone()
     }
 }
 
@@ -180,6 +189,7 @@ async fn run() {
 
     // 번역 키는 서버에만 둔다. 없으면 자막은 원문만 확정된다.
     // 음성 인식 토큰도 같은 키로 발급하고, 번역기와 HTTP 연결을 공유한다.
+    let spend = Arc::new(spend::Budget::from_env());
     let mut translator: Option<Arc<dyn Translator>> = None;
     let mut stt: Option<Arc<dyn SttTokens>> = None;
     match std::env::var("GEMINI_API_KEY") {
@@ -187,7 +197,7 @@ async fn run() {
             let key = key.trim().to_owned();
             let model = std::env::var("GEMINI_TRANSLATE_MODEL")
                 .unwrap_or_else(|_| gemini::DEFAULT_MODEL.into());
-            let gemini = Arc::new(Gemini::new(key.clone(), model));
+            let gemini = Arc::new(Gemini::new(key.clone(), model, spend.tokens.clone()));
             let stt_model =
                 std::env::var("GEMINI_STT_MODEL").unwrap_or_else(|_| live::DEFAULT_MODEL.into());
             stt = Some(Arc::new(GeminiLive::new(gemini.client(), key, stt_model)));
@@ -225,6 +235,7 @@ async fn run() {
         auth,
         accounts: Arc::new(account::Accounts::new(mailer, origin, google)),
         billing,
+        spend,
         dev_mode,
         cookie_secure,
         trusted_proxy,
@@ -239,6 +250,10 @@ async fn run() {
             // 번역 시간을 먼저 재고(지울 방 포함), 그다음 빈 방을 지워 끝난 회의로 남긴다.
             let metered = sweeper.rooms.meter(now);
             meetings::tick(&sweeper, &metered).await;
+            sweeper
+                .spend
+                .tick(sweeper.auth.db(), &sweeper.rooms, &sweeper.accounts.mailer, &metered, db::now_secs())
+                .await;
             let ended = sweeper.rooms.sweep(now);
             meetings::spawn_end(&sweeper, ended);
             sweeper.auth.sweep();

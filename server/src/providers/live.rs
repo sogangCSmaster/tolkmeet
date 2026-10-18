@@ -117,7 +117,7 @@ impl SttTokens for GeminiLive {
 }
 
 /// `2026-10-16T09:30:00Z` 형식(UTC, 초 단위). 날짜 라이브러리 없이 일 수 → 연월일 변환만 한다.
-fn rfc3339(t: SystemTime) -> String {
+pub(crate) fn rfc3339(t: SystemTime) -> String {
     let secs = t.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
     let (days, rem) = (secs / 86_400, secs % 86_400);
     // Howard Hinnant의 civil_from_days

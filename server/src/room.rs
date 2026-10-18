@@ -7,6 +7,7 @@
 //! - 수락·거절·설정 변경은 그 방의 주최자 참가자만 할 수 있다. 모든 검사는 이 모듈에서 한다.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -421,6 +422,9 @@ pub struct Rooms {
     ice: Ice,
     /// 이번 결제 기간의 번역 시간을 다 쓴 주최자(계정 id). 이들의 방은 음성 인식 토큰을 받지 못한다.
     out_of_time: Mutex<HashSet<String>>,
+    /// 오늘(UTC) Gemini 추정 지출이 운영자 상한을 넘었다(`spend`). 모든 방의 음성 인식·번역을 멈춘다.
+    /// 바꿀 때는 `rooms`를 잡은 채로 바꾼다(막힘이 바뀌는 순간 앞까지를 바뀌기 전 상태로 재려고).
+    spend_paused: AtomicBool,
     /// 주최자별 말 없는 토큰 한도(`HOST_TEXTLESS_*`). 잠금 순서: `rooms` 다음에 잡는다.
     host_textless: Mutex<HashMap<String, Bucket>>,
 }
@@ -433,6 +437,8 @@ pub struct Metered {
     pub seconds: i64,
     /// 지금까지 한꺼번에 입장해 있던 최대 인원(회의 기록용)
     pub peak: usize,
+    /// 지금 이 방에 입장한 사람들의 서로 다른 언어 수(지출 추정용: 말 하나가 언어 수 - 1개로 번역된다)
+    pub langs: usize,
 }
 
 pub struct JoinRequest {
@@ -457,6 +463,7 @@ impl Rooms {
             rooms: Mutex::default(),
             ice,
             out_of_time: Mutex::default(),
+            spend_paused: AtomicBool::new(false),
             host_textless: Mutex::default(),
         }
     }
@@ -523,9 +530,10 @@ impl Rooms {
     pub fn meter(&self, now: Instant) -> Vec<Metered> {
         let blocked = self.out_of_time_hosts();
         let mut rooms = self.rooms.lock().unwrap();
+        let paused = self.spend_paused();
         let mut out = Vec::new();
         for (code, room) in rooms.iter_mut() {
-            room.accrue(now, blocked.contains(&room.host_account));
+            room.accrue(now, paused || blocked.contains(&room.host_account));
             if room.settings.translation && room.host_away(now) {
                 room.tell_host_away("");
             }
@@ -539,6 +547,7 @@ impl Rooms {
                     code: code.clone(),
                     seconds: whole as i64,
                     peak: room.peak,
+                    langs: room.members.values().map(|m| m.peer.lang.as_str()).collect::<HashSet<_>>().len(),
                 });
             }
         }
@@ -566,7 +575,7 @@ impl Rooms {
         for room in rooms.values_mut() {
             // 바뀌기 전 상태로 지금까지를 먼저 잰다(막히기 전까지는 세고, 막혀 있던 동안은 세지 않게).
             let code = if blocked.contains(&room.host_account) {
-                room.accrue(now, false);
+                room.accrue(now, self.spend_paused());
                 NoticeCode::QuotaExceeded
             } else if restored.contains(&room.host_account) {
                 room.accrue(now, true);
@@ -576,6 +585,37 @@ impl Rooms {
             };
             broadcast(&room.members, "", ServerMsg::Notice { code });
         }
+    }
+
+    /// 오늘 지출 상한을 넘었는지 바꾼다(`spend::Budget`). 바뀌면 모든 방에 알리고 true.
+    pub fn set_spend_paused(&self, on: bool) -> bool {
+        self.set_spend_paused_at(on, Instant::now())
+    }
+
+    fn set_spend_paused_at(&self, on: bool, now: Instant) -> bool {
+        // 잠금 순서는 다른 곳과 같게 방 → 시간 목록.
+        let mut rooms = self.rooms.lock().unwrap();
+        if self.spend_paused() == on {
+            return false;
+        }
+        let out = self.out_of_time.lock().unwrap().clone();
+        let code = if on { NoticeCode::SpendLimit } else { NoticeCode::SpendRestored };
+        for room in rooms.values_mut() {
+            // 바뀌기 전 상태로 지금까지를 먼저 잰다(멈춘 동안은 주최자의 시간을 쓰지 않게).
+            room.accrue(now, !on || out.contains(&room.host_account));
+            broadcast(&room.members, "", ServerMsg::Notice { code });
+        }
+        self.spend_paused.store(on, Ordering::Relaxed);
+        true
+    }
+
+    pub fn spend_paused(&self) -> bool {
+        self.spend_paused.load(Ordering::Relaxed)
+    }
+
+    /// 이 주최자의 방에서 자막을 만들지 않는지(번역 시간이 떨어졌거나 오늘 지출 상한을 넘음).
+    fn blocked(&self, host: &str) -> bool {
+        self.spend_paused() || self.out_of_time.lock().unwrap().contains(host)
     }
 
     pub fn out_of_time_hosts(&self) -> HashSet<String> {
@@ -597,7 +637,7 @@ impl Rooms {
         }
     }
 
-    /// 이 방에서 지금 음성 인식 토큰을 주지 않는 까닭: 주최자의 번역 시간이 떨어졌거나 주최자가 오래 없다.
+    /// 이 방에서 지금 음성 인식 토큰을 주지 않는 까닭: 주최자의 번역 시간이 떨어졌거나, 오늘 지출 상한을 넘었거나, 주최자가 오래 없다.
     /// 주최자가 없는 것을 여기서 처음 알았으면(주기 작업보다 먼저) 방 전원에게 알리고 알린 것으로 둔다
     /// (돌아왔을 때 `HostBack`을 보내게).
     pub fn stt_blocked(&self, code: &str, now: Instant) -> Option<NoticeCode> {
@@ -605,6 +645,8 @@ impl Rooms {
         let room = rooms.get_mut(code)?;
         if self.out_of_time.lock().unwrap().contains(&room.host_account) {
             Some(NoticeCode::QuotaExceeded)
+        } else if self.spend_paused() {
+            Some(NoticeCode::SpendLimit)
         } else if room.host_away(now) {
             room.tell_host_away("");
             Some(NoticeCode::HostAway)
@@ -631,7 +673,8 @@ impl Rooms {
         let mut rooms = self.rooms.lock().unwrap();
         let room = rooms.get_mut(code).ok_or(ErrorCode::RoomNotFound)?;
         let now = Instant::now();
-        let blocked = self.out_of_time.lock().unwrap().contains(&room.host_account);
+        let out_of_time = self.out_of_time.lock().unwrap().contains(&room.host_account);
+        let blocked = out_of_time || self.spend_paused();
         // 1회용: 맞든 틀리든 쓴 토큰은 지운다.
         let mut resumed = req
             .resume
@@ -685,9 +728,13 @@ impl Rooms {
             };
             send(&tx, welcome);
             // 다시 연결한 화면도 지금 상태를 알게 입장 직후 알린다(그사이 바뀐 알림을 놓쳤을 수 있다).
-            if blocked {
+            if out_of_time {
                 send(&tx, ServerMsg::Notice { code: NoticeCode::QuotaExceeded });
-            } else if !is_host && room.settings.translation && room.host_away(now) {
+            }
+            if self.spend_paused() {
+                send(&tx, ServerMsg::Notice { code: NoticeCode::SpendLimit });
+            }
+            if !blocked && !is_host && room.settings.translation && room.host_away(now) {
                 send(&tx, ServerMsg::Notice { code: NoticeCode::HostAway });
                 room.tell_host_away(&id);
             }
@@ -762,10 +809,14 @@ impl Rooms {
             resume,
         };
         send(&member.tx, welcome);
-        let blocked = self.out_of_time.lock().unwrap().contains(&room.host_account);
-        if blocked {
+        let out_of_time = self.out_of_time.lock().unwrap().contains(&room.host_account);
+        if out_of_time {
             send(&member.tx, ServerMsg::Notice { code: NoticeCode::QuotaExceeded });
         }
+        if self.spend_paused() {
+            send(&member.tx, ServerMsg::Notice { code: NoticeCode::SpendLimit });
+        }
+        let blocked = out_of_time || self.spend_paused();
         broadcast(
             &room.members,
             guest,
@@ -808,7 +859,7 @@ impl Rooms {
         if !room.is_host_member(by) {
             return Err(ErrorCode::Forbidden);
         }
-        room.accrue(Instant::now(), self.out_of_time.lock().unwrap().contains(&room.host_account));
+        room.accrue(Instant::now(), self.blocked(&room.host_account));
         if room.settings.translation != settings.translation {
             room.caption_epoch += 1;
             room.caption_changes.send_modify(|v| *v += 1);
@@ -893,7 +944,7 @@ impl Rooms {
         let Some(room) = rooms.get_mut(code) else {
             return;
         };
-        room.accrue(Instant::now(), self.out_of_time.lock().unwrap().contains(&room.host_account));
+        room.accrue(Instant::now(), self.blocked(&room.host_account));
         if let Some(member) = room.members.remove(id) {
             room.caption_changes.send_modify(|v| *v += 1);
             broadcast(&room.members, id, ServerMsg::PeerLeft { id: id.to_owned() });
@@ -946,7 +997,7 @@ impl Rooms {
         let room = rooms.get_mut(code)?;
         // 주최자의 번역 시간이 떨어졌거나 주최자가 오래 없으면 자막을 만들지 않는다(이미 받은 음성 인식 세션이 남아 있어도).
         if !room.settings.translation
-            || self.out_of_time.lock().unwrap().contains(&room.host_account)
+            || self.blocked(&room.host_account)
             || room.host_away(spoke_at.unwrap_or_else(Instant::now))
         {
             return None;

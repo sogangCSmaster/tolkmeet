@@ -17,6 +17,7 @@ use crate::pipeline::{Pipeline, SpeakerHandle};
 use crate::protocol::{ClientMsg, ErrorCode, PeerId, ServerMsg};
 use crate::providers::live::SttTokens;
 use crate::room::{self, JoinOutcome, JoinRequest, Outbox, Rooms};
+use crate::spend::Budget;
 
 /// SDP는 수 KB 수준이다. 이보다 큰 메시지는 거부한다.
 const MAX_MESSAGE_BYTES: usize = 64 * 1024;
@@ -62,6 +63,7 @@ pub async fn handler(
     State(auth): State<Arc<Auth>>,
     State(pipeline): State<Arc<Pipeline>>,
     State(stt): State<Option<Arc<dyn SttTokens>>>,
+    State(spend): State<Arc<Budget>>,
 ) -> Response {
     // 다른 사이트의 페이지가 사용자의 쿠키로 연결하는 것(cross-site WebSocket hijacking)을 막는다.
     if !same_origin(&headers) {
@@ -71,7 +73,7 @@ pub async fn handler(
         auth::token_from_headers(&headers).filter(|token| auth.session_user(token).is_some());
     ws.max_message_size(MAX_MESSAGE_BYTES)
         .max_frame_size(MAX_MESSAGE_BYTES)
-        .on_upgrade(move |socket| run(socket, rooms, pipeline, stt, auth, token))
+        .on_upgrade(move |socket| run(socket, rooms, pipeline, stt, spend, auth, token))
 }
 
 /// 브라우저가 보낸 Origin의 host:port가 요청 Host와 같아야 한다. Origin이 없으면 거부.
@@ -91,6 +93,7 @@ async fn run(
     rooms: Arc<Rooms>,
     pipeline: Arc<Pipeline>,
     stt: Option<Arc<dyn SttTokens>>,
+    spend: Arc<Budget>,
     auth: Arc<Auth>,
     token: Option<String>,
 ) {
@@ -332,15 +335,21 @@ async fn run(
                     (Some(issuer), Some(langs), None) if rooms.take_stt_token(room, id, Instant::now()) => {
                         // 발급은 Gemini 왕복(수백 ms)이라 연결 루프를 막지 않도록 따로 돌린다.
                         let issue = issuer.issue(&langs);
+                        let spend = spend.clone();
                         let tx = tx.clone();
                         let (rooms, room, id) = (rooms.clone(), room.clone(), id.clone());
                         stt_tasks.spawn(async move {
                             let msg = match issue.await {
-                                Ok(grant) => ServerMsg::SttToken {
-                                    id: req,
-                                    token: grant.token,
-                                    model: grant.model,
-                                },
+                                Ok(grant) => {
+                                    spend.stt_issued();
+                                    // 발급하는 사이 막혔으면(지출 상한 등) 받은 토큰을 건네지 않는다.
+                                    if let Some(code) = rooms.stt_blocked(&room, Instant::now()) {
+                                        tx.send(ServerMsg::Notice { code });
+                                        ServerMsg::SttTokenDenied { id: req, retry: false }
+                                    } else {
+                                        ServerMsg::SttToken { id: req, token: grant.token, model: grant.model }
+                                    }
+                                }
                                 Err(err) => {
                                     tracing::warn!(%err, "stt token failed");
                                     // 받지 못한 토큰은 한도에서 빼지 않는다(다시 요청하게 하는 실패라서).
@@ -509,6 +518,7 @@ mod tests {
                     None,
                 )),
                 billing: None,
+                spend: Arc::new(crate::spend::Budget::new(None, Default::default())),
                 dev_mode: false,
                 cookie_secure: false,
                 trusted_proxy: false,
@@ -840,6 +850,34 @@ mod tests {
             next_message(&mut host).await,
             Some(ServerMsg::SttTokenDenied { retry: false, .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn spend_limit_pauses_stt_tokens_and_resumes() {
+        let server = TestServer::start().await;
+        let room = server.room();
+        let mut host = welcomed(&server, &room).await;
+        server.rooms.set_spend_paused(true);
+        assert!(matches!(
+            next_message(&mut host).await,
+            Some(ServerMsg::Notice { code: crate::protocol::NoticeCode::SpendLimit })
+        ));
+        send(&mut host, ClientMsg::SttToken { id: 1 }).await;
+        assert!(matches!(
+            next_message(&mut host).await,
+            Some(ServerMsg::Notice { code: crate::protocol::NoticeCode::SpendLimit })
+        ));
+        assert!(matches!(
+            next_message(&mut host).await,
+            Some(ServerMsg::SttTokenDenied { retry: false, .. })
+        ));
+        server.rooms.set_spend_paused(false);
+        assert!(matches!(
+            next_message(&mut host).await,
+            Some(ServerMsg::Notice { code: crate::protocol::NoticeCode::SpendRestored })
+        ));
+        send(&mut host, ClientMsg::SttToken { id: 2 }).await;
+        assert!(matches!(next_message(&mut host).await, Some(ServerMsg::SttToken { id: 2, .. })));
     }
 
     #[tokio::test]

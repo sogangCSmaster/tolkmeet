@@ -2531,6 +2531,7 @@ mod tests {
                 auth: Arc::new(crate::auth::Auth::new(HashMap::new())),
                 accounts: Arc::new(Accounts::new(crate::mail::Mailer::off(), "http://localhost".into(), Some(google))),
                 billing: None,
+                spend: Arc::new(crate::spend::Budget::new(None, Default::default())),
                 dev_mode: false,
                 cookie_secure: false,
                 trusted_proxy: false,
