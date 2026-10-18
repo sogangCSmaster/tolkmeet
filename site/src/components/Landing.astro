@@ -216,23 +216,25 @@ const jsonLd = [
       <h2 id="modes-title" class="h-lg center">{t.modesTitle}</h2>
       <p class="lead-21 modes-lead">{t.modesLead}</p>
       <div class="modes-grid">
-        <div class="mode mode-video">
+        {/* 마우스를 올리면(터치 화면은 카드가 보이면) 화면이 실제로 돌아가듯 움직인다. data-lv-dur는 한 바퀴(초),
+            data-lv는 그 줄이 흘러 들어오기 시작하는 시각, data-lv-talk는 말하는 표시가 켜지는 구간, data-lv-rise는 새 줄에 밀려 올라가는 줄. */}
+        <div class="mode mode-video" data-lv-dur="5.6">
           <div class="mode-video-text">
             <p class="eyebrow eyebrow-dark">{t.modeVideo.eyebrow}</p>
             <h3 class="mode-video-title">{t.modeVideo.title1}<br />{t.modeVideo.title2}</h3>
             <p class="mode-video-body">{t.modeVideo.body}</p>
           </div>
-          <div class="vm" aria-hidden="true">
+          <div class="vm" aria-hidden="true" data-lv-talk="0.6-2.4">
             <div class="vm-tile"><span class="avatar avatar-md speaking" lang={people.other.lang}>{initial(people.other.name)}</span><span lang={people.other.lang}>{people.other.name}</span></div>
             <div class="vm-tile"><span class="avatar avatar-md" lang={people.me.lang}>{initial(people.me.name)}</span><span lang={people.me.lang}>{people.me.name}</span></div>
             <div class="hist hist-mini">
               <div class="hist-head"><b>{t.historyTitle}</b><span class="hist-live"><span class="bars"><i></i><i></i><i></i></span>{t.historyListening}</span></div>
               <div class="hist-lines">
                 {[h0, h2].map((h, i) => (
-                  <div class={`hl hm-${i}`}>
+                  <div class={`hl hm-${i}`} data-lv-rise={i === 0 ? '' : undefined}>
                     <p class="hl-meta"><b lang={people[h.who].lang}>{people[h.who].name}</b><time>{h.time}</time></p>
-                    <p class="hl-src" lang={h.src[0]}>{h.src[1]}</p>
-                    <p class="hl-tr"><i></i><span lang={h.tr[0]}>{h.tr[1]}</span></p>
+                    <p class="hl-src" lang={h.src[0]} data-lv={i === 1 ? '0.75' : undefined}>{h.src[1]}</p>
+                    <p class="hl-tr"><i></i><span lang={h.tr[0]} data-lv={i === 1 ? '1.6' : undefined}>{h.tr[1]}</span></p>
                   </div>
                 ))}
               </div>
@@ -240,7 +242,8 @@ const jsonLd = [
           </div>
         </div>
 
-        <div class="mode mode-light">
+        {/* 내가 버튼을 누르고 말하면 위쪽(상대 쪽)에 번역이 나오고, 이어서 상대의 말이 아래쪽(내 쪽)에 나온다. */}
+        <div class="mode mode-light" data-lv-dur="6.6">
           <div>
             <p class="eyebrow">{t.modeInPerson.eyebrow}</p>
             <h3 class="mode-title">{t.modeInPerson.title1}<br />{t.modeInPerson.title2}</h3>
@@ -248,21 +251,21 @@ const jsonLd = [
           </div>
           {/* 휴대폰 하나: 위쪽 반은 마주 앉은 상대를 향해 뒤집혀 있다 */}
           <div class="phone" aria-hidden="true">
-            <div class="phone-top"><span class="ph-src" lang={t.phoneTop.src[0]}>{t.phoneTop.src[1]}</span><span class="ph-tr" lang={t.phoneTop.tr[0]}>{t.phoneTop.tr[1]}</span></div>
-            <div class="phone-bottom"><span class="ph-src" lang={t.phoneBottom.src[0]}>{t.phoneBottom.src[1]}</span><span class="ph-tr" lang={t.phoneBottom.tr[0]}>{t.phoneBottom.tr[1]}</span><span class="ph-btn">{t.phoneButton}</span></div>
+            <div class="phone-top"><span class="ph-src" lang={t.phoneTop.src[0]} data-lv="0.7">{t.phoneTop.src[1]}</span><span class="ph-tr" lang={t.phoneTop.tr[0]} data-lv="1.3">{t.phoneTop.tr[1]}</span></div>
+            <div class="phone-bottom" data-lv-talk="0.5-1.9"><span class="ph-src" lang={t.phoneBottom.src[0]} data-lv="2.6">{t.phoneBottom.src[1]}</span><span class="ph-tr" lang={t.phoneBottom.tr[0]} data-lv="3.2">{t.phoneBottom.tr[1]}</span><span class="ph-btn">{t.phoneButton}</span></div>
           </div>
         </div>
 
-        <div class="mode mode-light">
+        <div class="mode mode-light" data-lv-dur="5.6">
           <div>
             <p class="eyebrow">{t.modeCaptions.eyebrow}</p>
             <h3 class="mode-title">{t.modeCaptions.title1}<br />{t.modeCaptions.title2}</h3>
             <p class="body-17 mode-body">{t.modeCaptions.body}</p>
           </div>
           <div class="tablet" aria-hidden="true">
-            <p class="tb-0" lang={t.tabletPast[0][0]}>{t.tabletPast[0][1]}</p>
-            <p class="tb-1" lang={t.tabletPast[1][0]}>{t.tabletPast[1][1]}</p>
-            <div><p class="tb-src" lang={t.tabletNow.src[0]}>{t.tabletNow.src[1]}</p><p class="tb-tr" lang={t.tabletNow.tr[0]}>{t.tabletNow.tr[1]}</p></div>
+            <p class="tb-0" lang={t.tabletPast[0][0]} data-lv-rise>{t.tabletPast[0][1]}</p>
+            <p class="tb-1" lang={t.tabletPast[1][0]} data-lv-rise>{t.tabletPast[1][1]}</p>
+            <div><p class="tb-src" lang={t.tabletNow.src[0]} data-lv="0.7">{t.tabletNow.src[1]}</p><p class="tb-tr" lang={t.tabletNow.tr[0]} data-lv="1.45">{t.tabletNow.tr[1]}</p></div>
           </div>
         </div>
       </div>
@@ -374,8 +377,8 @@ const jsonLd = [
       <h2 id="faq-title" class="h-md">{t.faqTitle}</h2>
       {t.faq.map((f, i) => (
         <details open={i === 0}>
-          <summary>{f.q}</summary>
-          <p>{f.a}</p>
+          <summary>{f.q}<span class="faq-i" aria-hidden="true"></span></summary>
+          <div class="faq-a"><div><p>{f.a}</p></div></div>
         </details>
       ))}
     </section>
@@ -464,6 +467,72 @@ const jsonLd = [
         }
         load().then(() => card.dispatchEvent(new Event('mo-open', { bubbles: true })), console.error)
       })
+    }
+  </script>
+  {/* 세 가지 자리 카드(빌드 후 인라인, 1KB 안팎): 마우스를 올리면(터치 화면은 카드가 화면에 보이면) 시간표대로 lv-* 상태를 바꾼다.
+      글자를 나타내고 테두리를 숨 쉬게 하는 일은 CSS 전환이 맡아서, 매 프레임 도는 스크립트가 없다. */}
+  <script>
+    const cards = document.querySelectorAll<HTMLElement>('[data-lv-dur]')
+    if (cards.length && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      const runs = new Map<HTMLElement, number[]>()
+      // 한글·가나·한자는 글자마다, 띄어 쓰는 글(영어)은 낱말마다 흘러 들어온다.
+      const split = (el: HTMLElement) => {
+        const text = el.textContent ?? ''
+        const cjk = /[぀-ヿ㐀-鿿가-힯]/.test(text)
+        if (!cjk) el.style.setProperty('--lv-step', '70ms')
+        el.replaceChildren(...(cjk ? [...text] : text.split(/(?<=\s)/)).map((part, i) => {
+          const s = document.createElement('span')
+          s.className = 'lv-c'
+          s.style.setProperty('--i', String(i))
+          s.textContent = part
+          return s
+        }))
+      }
+      const start = (card: HTMLElement) => {
+        if (runs.has(card)) return
+        const lines = [...card.querySelectorAll<HTMLElement>('[data-lv]')]
+        const talks = [...card.querySelectorAll<HTMLElement>('[data-lv-talk]')]
+        // 처음에는 지금 화면 그대로 보이다가, 곧 지금 줄이 빠지고 다음 말이 흘러 들어온다.
+        lines.forEach((l) => {
+          if (!l.querySelector('.lv-c')) split(l)
+          l.classList.add('lv-on')
+        })
+        card.classList.add('lv-run')
+        const timers: number[] = []
+        runs.set(card, timers)
+        const at = (s: number, f: () => void) => timers.push(window.setTimeout(f, s * 1000))
+        const loop = () => {
+          timers.length = 0
+          at(0.25, () => card.classList.replace('lv-new', 'lv-clear') || card.classList.add('lv-clear'))
+          at(0.55, () => {
+            lines.forEach((l) => l.classList.remove('lv-on'))
+            card.classList.replace('lv-clear', 'lv-new')
+          })
+          lines.forEach((l) => at(Number(l.dataset.lv), () => l.classList.add('lv-on')))
+          talks.forEach((el) => {
+            const [a, b] = (el.dataset.lvTalk ?? '').split('-').map(Number)
+            at(a, () => el.classList.add('lv-talk'))
+            at(b, () => el.classList.remove('lv-talk'))
+          })
+          at(Number(card.dataset.lvDur), loop)
+        }
+        loop()
+      }
+      const stop = (card: HTMLElement) => {
+        runs.get(card)?.forEach(clearTimeout)
+        runs.delete(card)
+        card.classList.remove('lv-run', 'lv-clear', 'lv-new')
+        card.querySelectorAll('.lv-on, .lv-talk').forEach((el) => el.classList.remove('lv-on', 'lv-talk'))
+      }
+      if (matchMedia('(hover: hover)').matches) {
+        cards.forEach((c) => {
+          c.addEventListener('pointerenter', () => start(c))
+          c.addEventListener('pointerleave', () => stop(c))
+        })
+      } else {
+        const io = new IntersectionObserver((es) => es.forEach((e) => (e.isIntersecting ? start : stop)(e.target as HTMLElement)), { threshold: 0.6 })
+        cards.forEach((c) => io.observe(c))
+      }
     }
   </script>
 </Base>
