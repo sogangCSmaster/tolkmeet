@@ -11,6 +11,8 @@ export type HistoryLine = Pair & { who: 'me' | 'other'; time: string }
 export type PrivacyLine = Pair & { who: 'me' | 'other' }
 /** 만나는 방식 카드 */
 export type Mode = { eyebrow: string; title1: string; title2: string; body: string }
+/** 자주 묻는 질문. refund면 답 끝에 환불 정책 링크를 붙인다. */
+export type Faq = { q: string; a: string; refund?: boolean }
 
 export const en = {
   lang: 'en',
@@ -186,14 +188,15 @@ export const en = {
 
   pricingTitle: 'Pricing.',
   pricingLead: 'Choose by the hours of translated meetings you need each month. Guests are always free.',
+  // 일일권 카드의 도장(장식)
+  dayStamp: '24H',
   plans: [
     { item: 'basic', name: 'Basic', price: '$19', unit: ' /month', note: '8 hours of translated meetings every month · Cancel anytime', cta: 'Start with Basic' },
     { item: 'pro', name: 'Pro', price: '$49', unit: ' /month', note: '20 hours of translated meetings every month · Cancel anytime', cta: 'Start with Pro' },
     { item: 'day', name: 'Day pass', price: '$12', unit: ' /24 hours', note: 'Up to 3 hours of translated meetings within 24 hours · One payment, no subscription', cta: 'Get a day pass' },
   ],
-  pricingFine: 'Every plan: all three ways to meet, nine languages and saved captions. Subscribers can add hours at $3 each in a busy month. US dollars, plus tax where applicable.',
-  pricingDay: 'Day pass: one payment, no subscription. Use up to 3 hours within 24 hours of paying; time left after that ends. You can buy another once it’s used up.',
-  pricingRefund: 'Refunds within 14 days of a payment: we return what you paid minus the time you used ($3 an hour) and payment processing costs (5% + $0.50).',
+  // 요금 아래에는 모든 요금제에 공통인 한 줄만 둔다. 추가 시간·일일권·환불은 아래 자주 묻는 질문에서 답한다.
+  pricingFine: 'Every plan includes all three ways to meet, nine languages and saved captions. Prices in US dollars, plus tax where applicable.',
 
   faqTitle: 'Questions.',
   faq: [
@@ -202,7 +205,9 @@ export const en = {
     { q: 'Can it replace a professional interpreter?', a: 'For everyday business conversation it works well. For contracts, medical or legal decisions, confirm the important points with a qualified interpreter.' },
     { q: 'What happens to my voice?', a: 'Your speech is sent to Google Gemini through its paid API to be turned into text and translated. Google does not use paid API data to train its models, and Tolkmeet does not store audio or captions.' },
     { q: 'What if I use up my hours?', a: 'Add hours for $3 each. Extra hours stay on your account until you use them. Or move to Pro for 20 hours a month. On a day pass, buy another one or subscribe.' },
-  ],
+    { q: 'How does a day pass work?', a: 'One payment, no subscription. Use up to 3 hours within 24 hours of paying; any time left after that ends. You can buy another once it’s used up.' },
+    { q: 'Can I get a refund?', a: 'Ask within 14 days of a payment and we return what you paid minus the time you used ($3 an hour) and payment processing costs (5% + $0.50).', refund: true },
+  ] as Faq[],
 
   closingTitle1: 'Your next meeting,',
   closingTitle2: 'in everyone’s language.',
