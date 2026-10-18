@@ -54,6 +54,7 @@ const toc: [string, string][] = [
       ["Usage", "Meeting start and end times, number of participants, languages chosen, minutes translated", "Apply plan limits, bill fairly, keep the service running", "Contract; legitimate interests (running and improving the service)"],
       ["Billing", "Plan, billing status, Paddle customer and subscription IDs, and when you consented to provision and transfer to Paddle. Never your card number or other payment details", "Manage your subscription and keep records", "Contract; legal obligation (tax and accounting)"],
       ["Payment records", "For each payment: the Paddle transaction ID, what was bought (a plan subscription or extra hours, and the hours added), the amount and currency, and any amount refunded", "Apply what you bought, handle refunds and chargebacks (including removing refunded hours), answer support requests", "Contract; legitimate interests (handling refunds, chargebacks and support requests)"],
+      ["Support emails", "The sender address and content of emails you send to an @tolkmeet.com address", "Answer your questions", "Legitimate interests (answering inquiries); contract where the inquiry is about your account or a purchase"],
       ["Technical", "IP address in web server, app and relay (TURN) server logs, kept up to 14 days. Logs never contain what was said", "Security, abuse prevention, rate limiting", "Legitimate interests (protecting the service and its users)"],
       ["Speech in meetings", "Audio and the text transcribed and translated from it, while a meeting runs", "Show live translated captions", "Contract"],
     ]}
@@ -73,10 +74,10 @@ const toc: [string, string][] = [
     label="Recipients"
     cols={["Recipient", "Role", "Country", "What they do", "Data"]}
     rows={[
-      ["Google LLC", "Processor", "The United States and other countries where Google operates", "Speech recognition and translation (Gemini API); Google sign-in if you choose it; a connectivity check (STUN) when joining a meeting", "Audio and text during a meeting; your Google identity; IP address"],
+      ["Google LLC", "Processor", "The United States and other countries where Google operates", "Speech recognition and translation (Gemini API); Google sign-in if you choose it; a connectivity check (STUN) when joining a meeting; our support mailbox (Gmail)", "Audio and text during a meeting; your Google identity; IP address; support emails you send us"],
       ["Paddle.com Market Limited", "Independent controller (Merchant of Record)", "United Kingdom", "Payments, invoices, sales tax and VAT, refunds", "Email address, internal user ID, plan; name, country and payment details you enter directly with Paddle"],
       ["Amazon Web Services", "Processor", "Republic of Korea (Seoul)", "Hosting and encrypted backups", "All data we store"],
-      ["Cloudflare, Inc.", "Processor", "United States and other countries where its network operates", "Account and invitation emails", "Email address and email content"],
+      ["Cloudflare, Inc.", "Processor", "United States and other countries where its network operates", "Account and invitation emails; receiving and forwarding emails sent to @tolkmeet.com addresses", "Email address and email content"],
     ]}
   />
   <p>We may also share data with professional advisers (such as lawyers and accountants) and with authorities where the law requires it.</p>
@@ -101,7 +102,8 @@ const toc: [string, string][] = [
     <li>Sign-in sessions expire after 30 days.</li>
     <li>Billing records are kept by Paddle as long as tax law requires.</li>
     <li>Server logs (web server, app and relay server, including IP addresses) are kept up to 14 days.</li>
-    <li>Audio, transcripts and translations are not stored by us. Google handles them under its API terms; Cloudflare keeps email delivery logs under its own policy.</li>
+    <li>Support emails are kept for up to one year after your inquiry is resolved, then deleted.</li>
+    <li>Audio, transcripts and translations are not stored by us. Google handles them under its API terms; Cloudflare keeps email delivery and forwarding logs under its own policy.</li>
   </ul>
 
   <h2 id="p10">Your rights</h2>
