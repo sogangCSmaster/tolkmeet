@@ -85,15 +85,17 @@ const scenes: Record<string, (k: Kit) => Scene> = {
     }
   },
 
-  // 발음 그대로: 말하는 마이크 알약 → 자막 카드(흐린 중간 글자 → 확정 → 번역) → 알약
+  // 발음 그대로: 말하는 마이크 알약 → 자막 카드 → 알약. 중간 글자가 써지는 동안 번역도 흐릿하게 함께 나오고,
+  // 확정되는 순간 둘 다 진해진다(말하는 동안 번역이 나온다).
   accent(k) {
     const mic = k.q('mic'), card = k.q('card'), interim = k.q('interim'), final = k.q('final'), tr = k.q('tr')
     const bars = k.qa('bar'), head = k.qa('hb')
     // 번역 줄이 나올 때 카드가 아래로 자란다: 그 전에는 번역 줄만큼 짧고 위로 올라가 있다.
     const M = k.size('mic'), C = k.size('card'), gap = tr.offsetHeight + 6
-    const size = morph([[0, M], [1.35, [C[0], C[1] - gap]], [3.75, C], [6.45, M]])
-    const oy = track([[0, 0], [1.35, -gap / 2], [3.75, 0]])
+    const size = morph([[0, M], [1.35, [C[0], C[1] - gap]], [2.0, C], [6.45, M]])
+    const oy = track([[0, 0], [1.35, -gap / 2], [2.0, 0]])
     const type = k.typer(interim)
+    const chars = [...tr.querySelectorAll<HTMLElement>('.mo-ch')]
     return {
       dur: 8,
       frame(t) {
@@ -106,7 +108,10 @@ const scenes: Record<string, (k: Kit) => Scene> = {
         show(interim, t, [[1.5, 3.2]], {}, 0.05)
         type(clamp((t - 1.6) / 1.4))
         show(final, t, [[3.25, 99]])
-        show(tr, t, [[3.75, 99]], {}, 0.4)
+        show(tr, t, [[2.05, 99]], { o: 0.55 + 0.45 * ramp(t, 3.25, 0.3) }, 0.25)
+        // 번역 글자가 중간 글자(1.6~3.0초)를 조금 늦게 따라가며 차례로 나타난다
+        const p = clamp((t - 2.05) / 1.35) * chars.length
+        chars.forEach((c, i) => put(c, { o: clamp(p - i) }))
       },
     }
   },

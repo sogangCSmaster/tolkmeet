@@ -83,7 +83,8 @@ const chart = [38, 56, 44, 70, 88]
         <p class="mo-src mo-type mo-faint ns" data-a="interim" lang={m.accentInterim[0]}><span>{m.accentInterim[1]}</span><i class="mo-cover"></i></p>
         <p class="mo-src" data-a="final" lang={m.accentSrc[0]}>{m.accentSrc[1]}</p>
       </div>
-      <p class="mo-tr" data-a="tr"><i class="mo-dash"></i><span lang={m.accentTr[0]}>{m.accentTr[1]}</span></p>
+      {/* 번역은 글자마다 나타나 중간 글자와 나란히 써진다(scenes.ts의 accent) */}
+      <p class="mo-tr" data-a="tr"><i class="mo-dash"></i><span lang={m.accentTr[0]}>{[...m.accentTr[1]].map((c) => <span class="mo-ch">{c}</span>)}</span></p>
     </div>
   </>}
 

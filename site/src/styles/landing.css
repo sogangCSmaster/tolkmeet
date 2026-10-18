@@ -259,6 +259,14 @@ a:hover { text-decoration: underline; }
 .dt-hint svg { flex: none; }
 .dt-hint-touch { display: none; }
 @media (hover: none) { .dt-hint-ptr { display: none; } .dt-hint-touch { display: inline; } }
+/* 터치 화면: 앞면 모서리의 재생 표시로 눌러 볼 수 있음을 알리고, 목록이 처음 보이면 첫 카드가 살짝 뒤집혔다 돌아온다 */
+@media (hover: none) {
+  .dt-front { position: relative; }
+  .dt-front h3 { padding-right: 40px; }
+  .dt-front::after { content: ""; position: absolute; top: 22px; right: 22px; width: 30px; height: 30px; border-radius: 50%; background: #C2381A url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23fff' d='M9 6.5v11l8.5-5.5z'/%3E%3C/svg%3E") 55% 50% / 14px no-repeat; }
+}
+.details li.dt-peek .dt-flip { animation: dt-peek 1.2s cubic-bezier(.3,1.2,.5,1) .2s; }
+@keyframes dt-peek { 40% { transform: rotateY(38deg); } }
 
 /* 장면 무대(384×240). 처음엔 핵심 상태(.k)만 흰 판 위에 멈춰 있고(.mo-static), 대화 상자에서는 src/motion/이 움직인다(.mo-live). */
 .mo-stage { position: relative; width: 384px; height: 240px; font-size: 13px; line-height: 1.35; color: #1D1D1F; text-align: left; -webkit-user-select: none; user-select: none; }
@@ -458,6 +466,15 @@ a:hover { text-decoration: underline; }
 .plan-pro .plan-cta:hover { background: #E8E8ED; }
 .plan-day { background: #FFFFFF; box-shadow: inset 0 0 0 1px #E3E3E8; }
 .plan-day.is-tilt { box-shadow: inset 0 0 0 1px #E3E3E8, 0 40px 70px -36px rgba(0,0,0,0.35); }
+/* 마우스가 없는 화면: 카드가 화면에 들어오면 빛이 한 번 스쳐 지나가고(is-seen), 누르면 살짝 눌린다.
+   일일권 도장은 어느 화면에서나 카드가 보일 때 쿵 찍히듯 나타난다(스크립트가 is-wait → is-seen). */
+@media (hover: none) {
+  .plan.is-seen::after { background: linear-gradient(105deg, rgba(255,255,255,0) 40%, rgba(255,255,255,0.85) 50%, rgba(255,255,255,0) 60%) no-repeat; background-size: 300% 100%; animation: plan-shine 1.3s cubic-bezier(.3,.6,.3,1) .15s; }
+  .plan:active { transform: scale(.985); transition-duration: .15s; }
+}
+@keyframes plan-shine { from { opacity: 1; background-position: 100% 0; } to { opacity: 1; background-position: 0 0; } }
+.plan-stamp { transition: transform .55s cubic-bezier(.3,1.6,.5,1) .25s, opacity .15s .25s; }
+.plan.is-wait:not(.is-seen) .plan-stamp { opacity: 0; transform: rotate(-34deg) scale(1.9); transition: none; }
 /* 절취선: 점선은 옆 홈(카드 밖으로 반쯤 나간 흰 원, 카드가 잘라 낸다) 사이에만 그린다 */
 .plan-perf { position: relative; height: 2px; margin: 10px calc(-1 * var(--pad)) 8px; visibility: hidden; }
 .plan-day .plan-perf { visibility: visible; background: repeating-linear-gradient(90deg, #D2D2D7 0 6px, transparent 6px 12px) 24px 0 / calc(100% - 48px) 2px no-repeat; }
@@ -507,6 +524,7 @@ a:hover { text-decoration: underline; }
 }
 @media (prefers-reduced-motion: reduce) {
   .plan { transition: none; }
+  .details li.dt-peek .dt-flip { animation: none; }
   .faq-i, .faq-i::before, .faq-i::after, .faq-a, .faq-a p, .faq details::details-content { transition: none; }
 }
 

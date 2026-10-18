@@ -445,8 +445,9 @@ const jsonLd = [
       </div>
     </div>
   </footer>
-  {/* 로더(빌드 후 페이지에 인라인, 1KB 미만): 카드에 처음 다가가면 움직임 모듈을 미리 받고, 누르면 연다.
-      터치 화면(hover 없음)은 첫 탭에 카드를 뒤집기만 하고 두 번째 탭에 연다. */}
+  {/* 로더(빌드 후 페이지에 인라인, 1KB 안팎): 카드에 처음 다가가면 움직임 모듈을 미리 받고, 누르면 연다.
+      터치 화면(hover 없음)은 한 번 누르면 카드가 뒤집히고 다 뒤집히면 장면이 열린다(마우스의 올리기 → 누르기를 한 번에).
+      카드 목록이 처음 보이면 첫 카드가 살짝 뒤집혔다 돌아와 뒤집히는 카드임을 알린다. */}
   <script>
     const list = document.querySelector<HTMLElement>('.details')
     const src = document.querySelector<HTMLTemplateElement>('#mo-src')?.content.querySelector('script')?.getAttribute('src')
@@ -466,15 +467,28 @@ const jsonLd = [
       list.addEventListener('pointerover', warm, { once: true })
       list.addEventListener('focusin', warm, { once: true })
       const touch = matchMedia('(hover: none)')
+      const still = matchMedia('(prefers-reduced-motion: reduce)')
+      const first = list.querySelector('li')
+      if (touch.matches && first) {
+        const io = new IntersectionObserver((es) => {
+          if (!es[0].isIntersecting) return
+          io.disconnect()
+          warm()
+          if (!still.matches) first.classList.add('dt-peek')
+        }, { threshold: 0.8 })
+        io.observe(first)
+      }
       list.addEventListener('click', (e) => {
         const card = (e.target as Element).closest('li')
         if (!card) return
-        if (touch.matches && !card.classList.contains('is-flip')) {
-          list.querySelector('.is-flip')?.classList.remove('is-flip')
+        const open = () => load().then(() => card.dispatchEvent(new Event('mo-open', { bubbles: true })), console.error)
+        if (touch.matches && !still.matches && !card.classList.contains('is-flip')) {
           card.classList.add('is-flip')
+          warm()
+          setTimeout(open, 650)
           return
         }
-        load().then(() => card.dispatchEvent(new Event('mo-open', { bubbles: true })), console.error)
+        open()
       })
     }
   </script>
@@ -490,15 +504,23 @@ const jsonLd = [
     if (cards.length && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
       const TEXT = '.hist-lines, .ph-src, .ph-tr, .tb-feed'
       const cjk = (text: string) => /[぀-ヿ㐀-鿿가-힯]/.test(text)
-      // 한글·가나·한자는 글자마다, 띄어 쓰는 글(영어)은 낱말마다 흘러 들어온다. span은 다 나오기까지 걸리는 초.
-      const span = ([, text]: Said) => (cjk(text) ? [...text].length * 0.032 : text.split(/\s+/).length * 0.07) + 0.35
-      const fill = (el: HTMLElement, [lang, text]: Said) => {
-        const c = cjk(text)
+      // 한글·가나·한자는 글자마다, 띄어 쓰는 글(영어)은 낱말마다 흘러 들어온다.
+      const parts = (text: string) => (cjk(text) ? [...text] : text.split(/(?<=\s)/))
+      // 말하는 동안 번역이 함께 나온다: 원문은 실제 말하는 빠르기(글자당 0.09초, 낱말당 0.25초)로 흘러 들어오고,
+      // 번역은 LAG초 뒤에 시작해 원문이 끝난 직후에 끝나도록 빠르기를 맞춘다. ds·dt는 원문·번역이 흘러 들어오는 데 걸리는 초.
+      const LAG = 0.5
+      const timing = ({ src: [, text] }: Turn) => {
+        const ds = parts(text).length * (cjk(text) ? 0.09 : 0.25)
+        return { ds, dt: Math.max(ds + 0.25 - LAG, 0.6) }
+      }
+      // 줄을 숨긴 글자 조각으로 채운다. dur초 동안 차례로 나타난다(lv-on).
+      const fill = (el: HTMLElement, [lang, text]: Said, dur: number) => {
+        const list = parts(text)
         el.lang = lang
         el.classList.add('lv-s')
         el.classList.remove('lv-on')
-        el.style.setProperty('--lv-step', c ? '32ms' : '70ms')
-        el.replaceChildren(...(c ? [...text] : text.split(/(?<=\s)/)).map((part, i) => {
+        el.style.setProperty('--lv-step', `${Math.round((dur * 1000) / list.length)}ms`)
+        el.replaceChildren(...list.map((part, i) => {
           const s = document.createElement('span')
           s.className = 'lv-c'
           s.style.setProperty('--i', String(i))
@@ -517,7 +539,7 @@ const jsonLd = [
 
       // 한 마디를 넣고, 다음 마디까지의 초를 돌려준다.
       const steps: Record<string, (card: HTMLElement, turn: Turn, at: At) => number> = {
-        // 화상 회의: 줄이 한 칸씩 위로 올라가고, 말하는 사람 테두리가 켜진 채 새 줄이 원문 → 번역 순으로 들어온다.
+        // 화상 회의: 줄이 한 칸씩 위로 올라가고, 말하는 사람 테두리가 켜진 채 새 줄의 원문과 번역이 함께 흘러 들어온다.
         video(card, turn, at) {
           const vm = card.querySelector<HTMLElement>('.vm')!
           const old = vm.querySelector<HTMLElement>('.hm-0')!
@@ -533,20 +555,20 @@ const jsonLd = [
           cur.querySelector('time')!.textContent = turn.time!
           const src = cur.querySelector<HTMLElement>('.hl-src')!
           const tr = cur.querySelector<HTMLElement>('.hl-tr span')!
-          fill(src, turn.src)
-          fill(tr, turn.tr)
+          const { ds, dt } = timing(turn)
+          fill(src, turn.src, ds)
+          fill(tr, turn.tr, dt)
           rise(older, from[0] - older.offsetTop, 0.5)
           rise(old, from[1] - old.offsetTop, 1)
           fadeIn(cur.querySelectorAll('.hl-meta, .hl-tr i'))
           vm.querySelectorAll('.avatar').forEach((av, k) => av.classList.toggle('speaking', (k === 0) === (turn.who === 'other')))
-          const a = span(turn.src)
           at(0.2, () => vm.classList.add('lv-talk'))
           at(0.35, () => on(src))
-          at(0.35 + a, () => on(tr))
-          at(0.45 + a, () => vm.classList.remove('lv-talk'))
-          return 0.35 + a + span(turn.tr) + 1.5
+          at(0.35 + LAG, () => on(tr))
+          at(0.45 + ds, () => vm.classList.remove('lv-talk'))
+          return 0.35 + LAG + dt + 1.9
         },
-        // 대면 대화: 말하는 사람 쪽 반의 가장자리가 켜지고, 듣는 사람 쪽 반에 원문 → 번역이 들어온다.
+        // 대면 대화: 말하는 사람 쪽 반의 가장자리가 켜지고, 듣는 사람 쪽 반에 원문과 번역이 함께 흘러 들어온다.
         phone(card, turn, at) {
           const me = turn.who === 'me'
           const half = card.querySelector<HTMLElement>(me ? '.phone-top' : '.phone-bottom')!
@@ -554,19 +576,19 @@ const jsonLd = [
           const src = half.querySelector<HTMLElement>('.ph-src')!
           const tr = half.querySelector<HTMLElement>('.ph-tr')!
           const out = fadeOut([src, tr])
-          const a = span(turn.src)
+          const { ds, dt } = timing(turn)
           at(0.1, () => talker.classList.add('lv-talk'))
           at(0.3, () => {
             out.forEach((x) => x.cancel())
-            fill(src, turn.src)
-            fill(tr, turn.tr)
+            fill(src, turn.src, ds)
+            fill(tr, turn.tr, dt)
           })
           at(0.4, () => on(src))
-          at(0.4 + a, () => on(tr))
-          at(0.5 + a, () => talker.classList.remove('lv-talk'))
-          return 0.4 + a + span(turn.tr) + 1.3
+          at(0.4 + LAG, () => on(tr))
+          at(0.5 + ds, () => talker.classList.remove('lv-talk'))
+          return 0.4 + LAG + dt + 1.7
         },
-        // 자막 화면: 자막이 한 칸씩 올라가고(지난 자막은 번역만 남는다), 새 자막이 원문 → 번역 순으로 들어온다.
+        // 자막 화면: 자막이 한 칸씩 올라가고(지난 자막은 번역만 남는다), 새 자막의 원문과 번역이 함께 흘러 들어온다.
         tablet(card, turn, at) {
           const tb = card.querySelector<HTMLElement>('.tablet')!
           const p0 = tb.querySelector<HTMLElement>('.tb-0')!
@@ -578,16 +600,16 @@ const jsonLd = [
           p0.textContent = p1.textContent
           p1.lang = tr.lang
           p1.textContent = tr.textContent
-          fill(src, turn.src)
-          fill(tr, turn.tr)
+          const { ds, dt } = timing(turn)
+          fill(src, turn.src, ds)
+          fill(tr, turn.tr, dt)
           rise(p0, from[0] - p0.offsetTop, 0.6)
           rise(p1, from[1] - p1.offsetTop, 1)
           const feed = tb.querySelector<HTMLElement>('.tb-feed')!
           feed.classList.toggle('lv-over', feed.scrollHeight > feed.clientHeight + 1)
-          const a = span(turn.src)
           at(0.3, () => on(src))
-          at(0.3 + a, () => on(tr))
-          return 0.3 + a + span(turn.tr) + 1.7
+          at(0.3 + LAG, () => on(tr))
+          return 0.3 + LAG + dt + 2.1
         },
       }
 
@@ -644,11 +666,24 @@ const jsonLd = [
       }
     }
   </script>
-  {/* 요금 카드(빌드 후 인라인, 1KB 미만): 마우스 쪽으로 살짝 기울고 빛이 반사된다(마우스가 있는 화면에서만, 움직임 줄이기 설정이면 없음).
+  {/* 요금 카드(빌드 후 인라인, 1KB 안팎): 마우스가 있으면 마우스 쪽으로 살짝 기울고 빛이 반사된다. 카드가 화면에 들어오면
+      is-seen을 붙여 일일권 도장이 찍히고, 마우스가 없는 화면에서는 빛이 한 번 스쳐 지나간다(CSS). 움직임 줄이기 설정이면 없음.
       위 스크립트와 나눠 두어 둘 다 인라인 한도(4KB) 안에 든다. */}
   <script>
+    const plans = document.querySelectorAll<HTMLElement>('.plan')
+    if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      const io = new IntersectionObserver((es) => es.forEach((e) => {
+        if (!e.isIntersecting) return
+        e.target.classList.add('is-seen')
+        io.unobserve(e.target)
+      }), { threshold: 0.6 })
+      plans.forEach((p) => {
+        p.classList.add('is-wait')
+        io.observe(p)
+      })
+    }
     if (matchMedia('(hover: hover)').matches && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      for (const card of document.querySelectorAll<HTMLElement>('.plan')) {
+      for (const card of plans) {
         let raf = 0
         card.addEventListener('pointermove', (e) => {
           cancelAnimationFrame(raf)

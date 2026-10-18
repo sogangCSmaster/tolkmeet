@@ -133,7 +133,7 @@ export const en = {
   details: [
     { scene: 'lang', title: '9 languages', body: 'Korean, Japanese, English, Chinese (Simplified), Spanish, French, German, Vietnamese and Thai. Each person picks their own.', desc: 'Open the language menu, pick 日本語, and your captions switch to Japanese.' },
     { scene: 'join', title: 'No sign-up', body: 'Guests open the link and ask to join. That’s it. No app to install, either.', desc: 'Copy the meeting link, then admit the guest when they ask to join. They don’t need an account.' },
-    { scene: 'accent', title: 'Any accent', body: 'Japanese spoken with a Korean accent is still written down as Japanese.', desc: 'Minjun speaks Japanese with a Korean accent. It is written down as Japanese, then translated.' },
+    { scene: 'accent', title: 'Any accent', body: 'Japanese spoken with a Korean accent is still written down as Japanese.', desc: 'Minjun speaks Japanese with a Korean accent. It is written down as Japanese, and the translation appears while he is still speaking.' },
     { scene: 'txt', title: 'Save as .txt', body: 'Each person can keep the conversation, original and translation, as a file.', desc: 'One click saves the conversation, original and translation, as a text file on your device.' },
     { scene: 'share', title: 'Screen share', body: 'While you present, a small caption window stays on top of your screen (Chrome, Edge).', desc: 'While you present, a small caption window floats over your screen and keeps updating (Chrome, Edge).' },
     { scene: 'oss', title: 'Open source', body: 'The code is public under AGPL-3.0, so you can check it yourself.', desc: 'The code behind the translation is public on GitHub under AGPL-3.0.' },
@@ -141,7 +141,7 @@ export const en = {
   // 위 카드의 장면 속 문구(앱 화면을 흉내 내므로 앱의 말투를 따른다). {name}은 사람 이름, {lang}은 언어 이름.
   motion: {
     hint: 'Click to watch',
-    hintTouch: 'Tap again to watch',
+    hintTouch: 'Playing',
     close: 'Close',
     langPill: 'My language',
     langPick: '日本語',
