@@ -41,6 +41,10 @@ const TEXTLESS_TOKEN_BURST: f64 = 6.0;
 /// 발급에 실패한 토큰의 일반 몫을 돌려주는 횟수(10분에 2번). 실패를 일부러 일으키는(이상한 언어 태그, 공유 키의 429) 화면이
 /// 돌려받은 한도로 Gemini를 끝없이 부르지 못하게 묶고, 가끔 생기는 실패만 정직한 화면에 돌려준다.
 const STT_REFUNDS_PER_SEC: f64 = 2.0 / 600.0;
+/// 주최자 한 명(그의 모든 방)이 말 없이 받을 수 있는 토큰. 참가자마다만 세면 방과 참가자를 늘려 과금 없이 쓸 수 있으므로
+/// 주최자 단위로도 묶는다. 정직하게 조용한 회의(3분마다 바꾸는 참가자 열두 명)까지는 걸리지 않고, 누군가 말하면 다시 찬다.
+const HOST_TEXTLESS_TOKENS_PER_SEC: f64 = 1.0 / 15.0;
+const HOST_TEXTLESS_TOKEN_BURST: f64 = 24.0;
 const STT_REFUND_BURST: f64 = 2.0;
 /// 번역 시간은 누군가 실제로 말한 뒤 이 시간까지만 센다(인원과 상관없이: 말없이 켜 둔 회의는 주최자의 시간을 쓰지 않는다).
 const SPEECH_ACTIVE: Duration = Duration::from_secs(90);
@@ -327,6 +331,8 @@ pub struct Rooms {
     ice: Ice,
     /// 이번 결제 기간의 번역 시간을 다 쓴 주최자(계정 id). 이들의 방은 음성 인식 토큰을 받지 못한다.
     out_of_time: Mutex<HashSet<String>>,
+    /// 주최자별 말 없는 토큰 한도(`HOST_TEXTLESS_*`). 잠금 순서: `rooms` 다음에 잡는다.
+    host_textless: Mutex<HashMap<String, Bucket>>,
 }
 
 /// 번역 시간 측정 한 번의 결과: 이 방에서 지난 측정 뒤로 번역이 돌아간 초.
@@ -361,6 +367,7 @@ impl Rooms {
             rooms: Mutex::default(),
             ice,
             out_of_time: Mutex::default(),
+            host_textless: Mutex::default(),
         }
     }
 
@@ -876,6 +883,9 @@ impl Rooms {
             if let Some(m) = room.members.get_mut(speaker) {
                 m.stt_tokens.spoke();
             }
+            if let Some(host) = self.host_textless.lock().unwrap().get_mut(&room.host_account) {
+                host.tokens = host.burst;
+            }
         }
         Some(audience)
     }
@@ -883,17 +893,29 @@ impl Rooms {
     /// 이 참가자가 음성 인식 토큰을 하나 더 받아도 되는지(받으면 한도를 하나 쓴다). 입장한 참가자만.
     pub fn take_stt_token(&self, code: &str, id: &str, now: Instant) -> bool {
         let mut rooms = self.rooms.lock().unwrap();
-        rooms
-            .get_mut(code)
-            .and_then(|room| room.members.get_mut(id))
-            .is_some_and(|m| m.stt_tokens.take(now))
+        let Some(room) = rooms.get_mut(code) else { return false };
+        let Some(m) = room.members.get_mut(id) else { return false };
+        let mut hosts = self.host_textless.lock().unwrap();
+        let host = hosts
+            .entry(room.host_account.clone())
+            .or_insert_with(|| Bucket::new(HOST_TEXTLESS_TOKENS_PER_SEC, HOST_TEXTLESS_TOKEN_BURST));
+        // 주최자 몫이 남아 있을 때만 참가자 몫을 쓴다(막힌 요청이 어느 쪽도 깎지 않게).
+        if !host.ready(now) || !m.stt_tokens.take(now) {
+            return false;
+        }
+        host.tokens -= 1.0;
+        true
     }
 
     /// 발급에 실패한 토큰의 한도를 돌려준다(Gemini 오류로 다시 요청하는 정직한 화면이 한도를 잃지 않게). 돌려주는 횟수는 묶는다.
     pub fn give_back_stt_token(&self, code: &str, id: &str, now: Instant) {
         let mut rooms = self.rooms.lock().unwrap();
-        if let Some(m) = rooms.get_mut(code).and_then(|room| room.members.get_mut(id)) {
+        let Some(room) = rooms.get_mut(code) else { return };
+        if let Some(m) = room.members.get_mut(id) {
             m.stt_tokens.give_back(now);
+            if let Some(host) = self.host_textless.lock().unwrap().get_mut(&room.host_account) {
+                host.give_back();
+            }
         }
     }
 
@@ -931,6 +953,11 @@ impl Rooms {
             room.resumes
                 .retain(|_, r| r.left_at.is_none_or(|t| now.duration_since(t) < RESUME_TTL));
         }
+        // 방이 남지 않은 주최자의 토큰 한도는 지운다.
+        self.host_textless
+            .lock()
+            .unwrap()
+            .retain(|host, _| rooms.values().any(|r| &r.host_account == host));
         ended
     }
 }
@@ -1612,6 +1639,35 @@ mod tests {
             rooms.create(HOST, ON).unwrap();
         }
         assert_eq!(rooms.create(HOST, ON).unwrap_err(), ErrorCode::Forbidden);
+    }
+
+    #[test]
+    fn silent_stt_tokens_are_also_capped_per_host() {
+        // 방과 참가자를 늘려도 한 주최자가 말 없이 받는 토큰은 주최자 한도까지만.
+        let rooms = Rooms::default();
+        let now = Instant::now();
+        let mut keep = Vec::new();
+        let mut issued = 0;
+        for _ in 0..5 {
+            let code = rooms.create(HOST, ON).unwrap();
+            let host = client();
+            let host_id = joined(rooms.join(&code, req("Host"), Some(HOST), host.tx.clone()).unwrap());
+            let mut ids = vec![host_id.clone()];
+            for i in 1..MAX_PEERS {
+                let c = client();
+                let id = waiting(rooms.join(&code, req(&i.to_string()), None, c.tx.clone()).unwrap());
+                rooms.admit(&code, &host_id, &id).unwrap();
+                ids.push(id);
+                keep.push(c);
+            }
+            keep.push(host);
+            for id in &ids {
+                for _ in 0..10 {
+                    issued += usize::from(rooms.take_stt_token(&code, id, now));
+                }
+            }
+        }
+        assert_eq!(issued, HOST_TEXTLESS_TOKEN_BURST as usize);
     }
 
     #[test]

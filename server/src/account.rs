@@ -60,8 +60,8 @@ pub struct Accounts {
     sign_in_starts_by_net: KeyedLimiter,
     /// 이메일 인증 코드 확인: 클라이언트(/64)마다 15분 30번, 망(/48)마다 120번을 먼저 보고,
     /// 그다음 (주소, 클라이언트)마다 5번, 주소마다 30번. 주소는 요청한 쪽 한도를 통과한 뒤에만 키로 쌓인다.
-    /// 틀린 시도가 코드를 없애지는 않는다. 주소 단위 한도는 여러 곳에서 나눠 맞히기를 막는 대신,
-    /// 여러 곳에서 일부러 틀리면 그 주소의 확인을 15분 동안 잠시 막을 수는 있다.
+    /// 틀린 시도는 그 주소의 살아 있는 코드마다도 센다(코드 하나에 5번). 주소 단위 한도는 여러 곳에서 나눠 맞히기를 막는 대신,
+    /// 여러 곳에서 일부러 틀리면 그 주소의 확인을 잠시 막을 수는 있다(새 코드를 받으면 다시 된다).
     verify_by_ip: KeyedLimiter,
     verify_by_net: KeyedLimiter,
     verify_by_client: KeyedLimiter,
@@ -522,6 +522,14 @@ pub async fn verify(
                     |r| Ok((r.get(0)?, r.get(1)?)),
                 )
                 .optional()?;
+            if row.is_none() {
+                // 틀린 코드: 살아 있는 코드마다 시도를 센다(코드 하나에 맞혀 볼 수 있는 수를 묶는다).
+                // 위의 요청한 쪽·주소 단위 한도를 통과한 시도만 여기 오므로 남이 한 곳에서 코드를 끝없이 죽이지는 못한다.
+                c.execute(
+                    "UPDATE email_codes SET attempts = attempts + 1 WHERE user_id = ?1 AND kind = 'verify' AND expires_at > ?2",
+                    params![u.id, now],
+                )?;
+            }
             Ok(row.map(|(id, payload)| (u.id, id, payload)))
         })
         .await;
