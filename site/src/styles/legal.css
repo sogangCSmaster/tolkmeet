@@ -44,14 +44,33 @@ body:has(> .legal) { background: var(--legal-bg); }
 .legal-text :is(ul, .legal-table) + :is(p, ul, .legal-table), .legal-text p + .legal-table { margin-top: 12px; }
 .legal-text ol { display: flex; flex-direction: column; gap: 6px; padding-left: 22px; }
 
-/* 표는 좁은 화면에서 표 안에서만 가로로 밀린다(페이지는 가로로 밀리지 않게) */
-.legal-table { overflow-x: auto; border-radius: 12px; background: var(--legal-card); }
-.legal-table table { width: 100%; min-width: 600px; border-collapse: collapse; font-size: 14px; line-height: 1.5; }
-.legal-table th, .legal-table td { padding: 10px 14px; border-bottom: 1px solid var(--divider); text-align: left; vertical-align: top; }
-.legal-table tr:last-child > * { border-bottom: 0; }
-.legal-table th { font-weight: 600; }
-.legal-table thead th { color: var(--text-secondary); font-size: 13px; }
-.legal-table:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+/*
+ * 표(components/LegalTable.astro). 기본은 줄마다 쌓기: 대상 이름 아래에 "열 이름 / 내용"을 나란히 둔다.
+ * 상자가 넉넉하고 열이 세 개 이하이면 보통 표로 바꾼다. 가로로 밀리는 표는 없다.
+ */
+.legal-table { container-type: inline-size; border-radius: 16px; background: var(--legal-card); }
+.legal-table table { width: 100%; border-collapse: collapse; font-size: 15px; line-height: 1.6; }
+.legal-table :is(table, tbody, tr, th, td) { display: block; }
+.legal-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.legal-table tbody tr { padding: 20px 22px; }
+.legal-table tbody tr + tr { border-top: 1px solid var(--divider); }
+.legal-table tbody th { margin-bottom: 10px; font-size: 17px; font-weight: 700; line-height: 1.4; text-align: left; }
+.legal-table td { display: grid; grid-template-columns: 8.5em minmax(0, 1fr); gap: 16px; padding: 5px 0; }
+.legal-table td::before { content: attr(data-label); content: attr(data-label) / ""; color: var(--text-secondary); font-size: 13px; font-weight: 600; line-height: 1.5; padding-top: 2px; }
+@container (max-width: 440px) {
+  .legal-table td { grid-template-columns: minmax(0, 1fr); gap: 2px; padding: 6px 0; }
+}
+@container (min-width: 600px) {
+  .legal-table:not(.is-stack) table { display: table; }
+  .legal-table:not(.is-stack) thead { position: static; width: auto; height: auto; overflow: visible; clip-path: none; white-space: normal; display: table-header-group; }
+  .legal-table:not(.is-stack) tbody { display: table-row-group; }
+  .legal-table:not(.is-stack) tr { display: table-row; }
+  .legal-table:not(.is-stack) :is(th, td) { display: table-cell; margin: 0; padding: 16px 22px; font-size: 15px; line-height: 1.6; text-align: left; vertical-align: top; }
+  .legal-table:not(.is-stack) td::before { content: none; }
+  .legal-table:not(.is-stack) thead th { padding-block: 14px 12px; border-bottom: 1px solid var(--divider); color: var(--text-secondary); font-size: 13px; font-weight: 600; }
+  .legal-table:not(.is-stack) tbody th { width: 30%; font-weight: 700; }
+  .legal-table:not(.is-stack) tbody tr + tr > * { border-top: 1px solid var(--divider); }
+}
 
 .legal-summary { padding: 28px; border-radius: var(--radius-card); background: var(--legal-card); }
 .legal-summary h2 { margin: 0 0 12px; font-size: 22px; }
@@ -81,5 +100,3 @@ body:has(> .legal) { background: var(--legal-bg); }
 /* .legal a의 링크 색이 건너뛰기 링크(진한 바탕)를 덮지 않게 */
 .legal .skip { color: var(--page-bg); }
 .legal-lang { white-space: nowrap; }
-/* 열 수가 많은 표(국외 이전)는 더 넓게 두고 상자 안에서 가로로 밀린다 */
-.legal-table-wide table { min-width: 900px; }

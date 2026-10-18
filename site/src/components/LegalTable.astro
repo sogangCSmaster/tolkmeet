@@ -1,0 +1,24 @@
+---
+// 법적 고지의 표. 줄마다 첫 칸이 대상(행 머리)이다.
+// 넓으면 표로, 좁거나 열이 네 개 이상이면 줄마다 "열 이름 / 내용"으로 쌓는다(칸이 좁아져 글이 세로로 길어지지 않게).
+// display를 바꿔도 화면 낭독기가 표로 읽도록 role을 직접 단다.
+interface Props {
+  label: string
+  cols: string[]
+  rows: string[][]
+}
+const { label, cols, rows } = Astro.props
+---
+<div class:list={['legal-table', { 'is-stack': cols.length >= 4 }]}>
+  <table role="table" aria-label={label}>
+    <thead role="rowgroup"><tr role="row">{cols.map((c) => <th role="columnheader" scope="col">{c}</th>)}</tr></thead>
+    <tbody role="rowgroup">
+      {rows.map(([head, ...cells]) => (
+        <tr role="row">
+          <th role="rowheader" scope="row">{head}</th>
+          {cells.map((cell, i) => <td role="cell" data-label={cols[i + 1]}>{cell}</td>)}
+        </tr>
+      ))}
+    </tbody>
+  </table>
+</div>
