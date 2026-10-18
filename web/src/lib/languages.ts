@@ -7,6 +7,7 @@ export const LANGUAGES = [
   { code: 'fr', name: 'Français' },
   { code: 'de', name: 'Deutsch' },
   { code: 'vi', name: 'Tiếng Việt' },
+  { code: 'th', name: 'ไทย' },
 ] as const
 
 export function languageName(code: string): string {

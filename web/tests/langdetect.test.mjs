@@ -57,3 +57,13 @@ test('mixed korean and japanese text goes to the language with clearly more lett
   assert.equal(sure('여보세요 はい', 'ko', 'ja'), false, 'close counts are not sure on an interim')
   assert.ok(sure('네, 그건 寿司가 맞아요', 'ko', 'ja'), 'a few kanji in korean stay korean')
 })
+
+test('thai is told apart by its own script from korean, japanese and latin languages', () => {
+  assert.equal(canAutoDetect('th', 'ko'), true)
+  assert.equal(canAutoDetect('th', 'en'), true)
+  assert.equal(lang('สวัสดีครับ ยินดีที่ได้รู้จัก', 'ko', 'th'), 'th')
+  assert.equal(sure('สวัสดีครับ', 'th', 'en'), true)
+  assert.equal(lang('안녕하세요 반갑습니다', 'th', 'ko'), 'ko')
+  // 태국어 문장 속 영어 제품명은 영어로 보지 않는다.
+  assert.equal(lang('ใช้ Tolkmeet ประชุมได้เลย', 'en', 'th'), 'th')
+})

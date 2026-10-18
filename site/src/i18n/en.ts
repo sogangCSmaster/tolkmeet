@@ -86,7 +86,7 @@ export const en = {
     { title: 'Guests need nothing', body: 'They open the link in Chrome, Safari or Edge and ask to join. You let them in.' },
     { title: 'Screen sharing', body: 'While you present, a small caption window stays on top of your screen (Chrome and Edge).' },
     { title: 'Keep the conversation', body: 'Anyone can save their own captions, original and translation, as a text file.' },
-    { title: 'Eight languages', body: 'Korean, Japanese, English, Chinese (Simplified), Spanish, French, German and Vietnamese. Each person picks their own.' },
+    { title: 'Nine languages', body: 'Korean, Japanese, English, Chinese (Simplified), Spanish, French, German, Vietnamese and Thai. Each person picks their own.' },
     { title: 'Open source', body: 'The code is public under AGPL-3.0, so you can check exactly what it does.' },
   ],
 
@@ -97,7 +97,7 @@ export const en = {
     { name: 'Pro', price: '$39', unit: '/month', hours: '30 hours of translated meetings a month', note: 'Monthly subscription. Cancel anytime.', cta: 'Start with Pro' },
   ],
   includesTitle: 'Every plan includes',
-  includes: ['Video meetings, in-person conversations and the live captions screen', 'All eight languages', 'Guests join free, without an account', 'Captions you can save as a text file'],
+  includes: ['Video meetings, in-person conversations and the live captions screen', 'All nine languages', 'Guests join free, without an account', 'Captions you can save as a text file'],
   pricingExtra: 'Need more in a busy month? Add hours for $3 each.',
   pricingFine: 'Prices in US dollars. Tax is added at checkout where it applies.',
 

@@ -133,6 +133,7 @@ pub fn language_name(tag: &str) -> &str {
         ("fr", _) => "French",
         ("de", _) => "German",
         ("vi", _) => "Vietnamese",
+        ("th", _) => "Thai",
         _ => tag,
     }
 }
@@ -356,6 +357,8 @@ mod tests {
         assert_eq!(language_name("ko"), "Korean");
         assert_eq!(language_name("zh-CN"), "Simplified Chinese");
         assert_eq!(language_name("zh-TW"), "Traditional Chinese");
-        assert_eq!(language_name("th"), "th");
+        assert_eq!(language_name("th"), "Thai");
+        // 모르는 태그는 그대로 넘긴다.
+        assert_eq!(language_name("sw"), "sw");
     }
 }
