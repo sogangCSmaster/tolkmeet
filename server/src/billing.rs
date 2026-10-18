@@ -992,6 +992,10 @@ impl Event {
                 params![txn],
                 |r| r.get::<_, bool>(0),
             )?;
+        // 표시는 한 번만 쓴다(같은 결제에 나중에 온 고객 환불을 장애 보상으로 보지 않게). 보상할 때마다 다시 표시한다.
+        if compensation {
+            tx.execute("DELETE FROM outage_credits WHERE transaction_id = ?1", params![txn])?;
+        }
         let ends_use = !compensation;
         // 추가 시간·일일권·차액으로 준 시간 중 돌려준 몫(누적)만큼 다시 뺀다(처음·갱신 결제의 시간은 요금제로 다룬다).
         let target = if ends_use || whole { seconds } else { seconds * refunded / total };
@@ -1803,6 +1807,9 @@ mod tests {
         // 장애 보상 일부 환불은 요금제를 그대로 둔다.
         let partial = b.apply_event(&db, outage(&db, "txn_s", adjustment("a1", "adj_1", "refund", "approved", "txn_s", false, "1000"))).await.unwrap();
         assert_eq!((partial.revoked, row(&db, uid).plan.as_str()), (None, "pro"));
+        // 표시는 한 번만 쓴다: 같은 결제에 나중에 온 고객 환불은 요금제를 끝낸다.
+        let later = b.apply_event(&db, adjustment("a1b", "adj_1b", "refund", "approved", "txn_s", false, "1000")).await.unwrap();
+        assert_eq!((later.revoked.as_deref(), row(&db, uid).plan.as_str()), (Some("sub_1"), "none"));
         // 차지백(또는 전액 환불)이면 끝내고, 웹훅 처리기가 Paddle 구독을 바로 해지한다. 같은 조정이 다시 와도 한 번만.
         let charged_back = b.apply_event(&db, adjustment("a2", "adj_2", "chargeback", "approved", "txn_s", true, "2900")).await.unwrap();
         assert_eq!((charged_back.revoked.as_deref(), row(&db, uid).plan.as_str()), (Some("sub_1"), "none"));
