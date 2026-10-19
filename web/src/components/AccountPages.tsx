@@ -998,6 +998,7 @@ function PasswordCard({ user }: { user: User }) {
   const [linking, setLinking] = useState(false)
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
+  const [again, setAgain] = useState('')
   const [busy, setBusy] = useState(false)
   // Google 연결이 실패하면 서버가 ?error=google로 돌려보낸다.
   const [error, setError] = useState<MessageKey | null>(() => (queryParam('error') === 'google' ? 'account.googleLinkFailed' : null))
@@ -1019,16 +1020,23 @@ function PasswordCard({ user }: { user: User }) {
   async function save(e: FormEvent) {
     e.preventDefault()
     if ([...next].length < 8) return setError('auth.passwordShort')
+    if (next !== again) return setError('auth.passwordMismatch')
     setBusy(true)
     setError(null)
     const r = await api.post('/api/account/password', { current, new: next })
     setBusy(false)
     if (!r.ok) return setError(errorKey(r.code))
+    cancel()
+    setNote('account.passwordChanged')
+    void refreshUser()
+  }
+
+  function cancel() {
     setOpen(false)
     setCurrent('')
     setNext('')
-    setNote('account.passwordChanged')
-    void refreshUser()
+    setAgain('')
+    setError(null)
   }
 
   // Google 연결은 비밀번호 없이 들어올 길이 하나 더 생기므로 한 번 더 확인한 뒤 Google로 보낸다.
@@ -1065,13 +1073,14 @@ function PasswordCard({ user }: { user: User }) {
             <input className="input" type="password" autoComplete="current-password" placeholder={t('account.currentPassword')} value={current} onChange={(e) => setCurrent(e.target.value)} aria-label={t('account.currentPassword')} autoFocus />
           )}
           <input className="input" type="password" autoComplete="new-password" placeholder={t('reset.new')} value={next} onChange={(e) => setNext(e.target.value)} aria-label={t('reset.new')} />
+          <input className="input" type="password" autoComplete="new-password" placeholder={t('reset.confirm')} value={again} onChange={(e) => setAgain(e.target.value)} aria-label={t('reset.confirm')} />
           <p className="form-note">{t('reset.note')}</p>
           <Message error={error} />
           <div className="row">
             <button className="btn btn-ink" disabled={busy}>
               {t('account.save')}
             </button>
-            <button type="button" className="btn btn-outline" onClick={() => setOpen(false)}>
+            <button type="button" className="btn btn-outline" onClick={cancel}>
               {t('room.cancel')}
             </button>
           </div>

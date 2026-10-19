@@ -61,6 +61,8 @@ pub struct RegistrationResponse {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AttestationResponse {
+    // 브라우저 필드 이름은 clientDataJSON이다(camelCase 변환으로는 clientDataJson이 되어 맞지 않는다).
+    #[serde(rename = "clientDataJSON")]
     pub client_data_json: String,
     pub attestation_object: String,
 }
@@ -74,6 +76,7 @@ pub struct AuthenticationResponse {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssertionResponse {
+    #[serde(rename = "clientDataJSON")]
     pub client_data_json: String,
     pub authenticator_data: String,
     pub signature: String,
@@ -344,6 +347,22 @@ mod tests {
 
     fn client_data(kind: &str, challenge: &str, origin: &str) -> String {
         B64.encode(json!({ "type": kind, "challenge": challenge, "origin": origin }).to_string())
+    }
+
+    #[test]
+    fn parses_browser_field_names() {
+        let reg: RegistrationResponse = serde_json::from_value(json!({
+            "id": "abc",
+            "response": { "clientDataJSON": "cd", "attestationObject": "ao" },
+        }))
+        .unwrap();
+        assert_eq!(reg.response.client_data_json, "cd");
+        let login: AuthenticationResponse = serde_json::from_value(json!({
+            "id": "abc",
+            "response": { "clientDataJSON": "cd", "authenticatorData": "ad", "signature": "s" },
+        }))
+        .unwrap();
+        assert_eq!(login.response.client_data_json, "cd");
     }
 
     #[test]

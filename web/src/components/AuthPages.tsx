@@ -288,6 +288,7 @@ export function Signup() {
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [again, setAgain] = useState('')
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<MessageKey | null>(null)
 
@@ -296,6 +297,7 @@ export function Signup() {
     const addr = email.trim().toLowerCase()
     if (!EMAIL.test(addr)) return setError('auth.emailInvalid')
     if ([...password].length < 8) return setError('auth.passwordShort')
+    if (password !== again) return setError('auth.passwordMismatch')
     setPending(true)
     setError(null)
     const r = await api.post('/api/signup', { email: addr, password, name: name.trim(), locale })
@@ -344,7 +346,23 @@ export function Signup() {
               minLength={8}
               placeholder={t('auth.passwordHint')}
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={(e) => {
+                setPassword(e.target.value)
+                if (error === 'auth.passwordMismatch') setError(null)
+              }}
+            />
+          </label>
+          <label>
+            <span>{t('reset.confirm')}</span>
+            <input
+              type="password"
+              autoComplete="new-password"
+              required
+              value={again}
+              onChange={(e) => {
+                setAgain(e.target.value)
+                if (error === 'auth.passwordMismatch') setError(null)
+              }}
             />
           </label>
         </div>
