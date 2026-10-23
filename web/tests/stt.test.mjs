@@ -541,3 +541,24 @@ test('a long utterance whose final never came does not swallow the next utteranc
   h.advance(4000)
   assert.ok(h.sent.some(([, text, final]) => final && text === 'hello world.'), JSON.stringify(h.sent.map(([s, t, f]) => [s, t.slice(0, 20), f])))
 })
+
+test('nonstop speech closes finished sentences so the speaking line stays at most two sentences', async () => {
+  const h = setup({ lang: 'en' })
+  await h.grant()
+  h.ready()
+  const ev = h.sessions[0].events
+  h.c.vad({ kind: 'start', frames: [speech(), speech()] })
+  ev.onInterim('One. Two')
+  ev.onInterim('One. Two. Three')
+  ev.onInterim('One. Two. Three. Version 3.5 is')
+  h.c.vad({ kind: 'end', frames: [silence()] })
+  ev.onFinal('One. Two. Three. Version 3.5 is out.')
+  assert.deepEqual(JSON.parse(JSON.stringify(h.sent)), [
+    [0, 'One. Two', false],
+    [0, 'One.', true],
+    [1, 'Two. Three', false],
+    [1, 'Two.', true],
+    [2, 'Three. Version 3.5 is', false],
+    [2, 'Three. Version 3.5 is out.', true],
+  ])
+})

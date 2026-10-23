@@ -46,6 +46,10 @@ const BACKOFF_MS = [1_000, 3_000, 10_000, 30_000]
 const MAX_BACKLOG = 110
 /** 쉬지 않고 오래 말해 중간 결과가 이보다 길어지면 그 자리에서 구간을 끊는다(서버는 메시지 하나에 1000자까지 받는다). */
 const MAX_INTERIM_CHARS = 800
+/** 문장 끝 부호. `.?!`는 뒤가 공백일 때만(`3.5` 같은 숫자를 자르지 않게). 서버 `split_sentences`와 같은 규칙. */
+const SENTENCE_END = /[。？！]|[.?!](?=\s)/g
+/** 문장 끝 부호 뒤에 붙는 닫는 따옴표·괄호·부호 */
+const TRAILING = new Set(['」', '』', '"', "'", ')', '）', '.', '?', '!', '。', '？', '！'])
 const KEEPALIVE_SILENCE = new Int16Array(1600)
 
 type Slot = {
@@ -295,6 +299,7 @@ export class SttController {
     // 받으면 같은 말이 새 구간으로 한 번 더 확정된다.
     if (!this.speaking && this.pendingFinals === 0) return
     const rest = this.afterCut(text)
+    const stable = final ? 0 : stableEnd(rest)
     if (final) {
       this.pendingFinals = Math.max(0, this.pendingFinals - 1)
       this.cut = ''
@@ -307,6 +312,13 @@ export class SttController {
       this.deps.sendStt(this.seg.next++, rest, true)
       this.sent = ''
       this.cut = text
+    } else if (stable > 0) {
+      // 쉬지 않고 이어 말하면 구간이 끝나지 않아 한 줄이 계속 자라고 번역도 매번 처음부터 다시 나온다.
+      // 뒤에 다른 문장이 끝난 문장은 더 고쳐지지 않으니 먼저 확정해 그 줄을 닫는다(말하는 줄은 최대 두 문장).
+      this.deps.sendStt(this.seg.next++, rest.slice(0, stable).trimEnd(), true)
+      this.cut = text.slice(0, text.length - rest.length + stable)
+      this.sent = rest.slice(stable).trimStart()
+      if (this.sent !== '') this.deps.sendStt(this.seg.next, this.sent, false)
     } else if (rest !== this.sent) {
       this.deps.sendStt(this.seg.next, rest, false)
       this.sent = rest
@@ -401,4 +413,15 @@ export class SttController {
       this.deps.onStatus(status)
     }
   }
+}
+
+/** 마지막에서 두 번째 문장 끝 위치(없으면 0). 그 앞의 문장들은 뒤에 끝난 문장이 하나 더 있어 확정해도 된다. */
+function stableEnd(text: string): number {
+  const ends: number[] = []
+  for (const m of text.matchAll(SENTENCE_END)) {
+    let end = m.index + m[0].length
+    while (end < text.length && TRAILING.has(text[end])) end++
+    if (ends.at(-1) !== end) ends.push(end)
+  }
+  return ends.length >= 2 ? ends[ends.length - 2] : 0
 }
